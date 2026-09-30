@@ -1073,8 +1073,19 @@ fn frame(data: &FD4TaskData) {
         // plus a floor exactly where the game has his feet (and for a moment after): whatever he
         // stands on, SM64 can create Mario there, at the right height (a floor it doesn't know,
         // like some platforms, made creation fail and left the player invisible)
+        // (the game holds a respawning player about a metre under the floor for a moment: the
+        // top of the ground within 2 m above his feet is where Mario goes)
+        let lift = unsafe { eldenring::cs::CSHavokMan::instance() }
+            .ok()
+            .and_then(|h| h.phys_world.cast_ray(RAY_FILTER, &HavokPosition(p.0, p.1 + 2.0, p.2, 0.0), eldenring::position::PositionDelta(0.0, -4.0, 0.0), player_ref))
+            .map(|g| (g.1 - p.1).clamp(0.0, 2.0))
+            .unwrap_or(0.0);
+        if lift > 0.05 {
+            log(format!("spawn: the ground is {lift:.2} m above the player's feet, Mario goes on top"));
+        }
+        let start_y = lift / SCALE;
         let mut surfaces = surfaces;
-        surfaces.extend(flat_floor([0.0, 0.0, 0.0]));
+        surfaces.extend(flat_floor([0.0, start_y, 0.0]));
         load_surfaces(&surfaces);
         *FOLLOW_ENDED.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
         {
@@ -1085,8 +1096,14 @@ fn frame(data: &FD4TaskData) {
                 equip::enforce(player_ref);
             }
         }
-        let id = worker::call("create", |_| unsafe { sm64::sm64_mario_create(0.0, 0.0, 0.0) }).unwrap_or(-1);
+        let id = worker::call("create", move |_| unsafe { sm64::sm64_mario_create(0.0, start_y + 1.0, 0.0) }).unwrap_or(-1);
         log(format!("mario created id={id} at {:?}", (p.0, p.1, p.2)));
+        // which collision is under his feet (a layer SM64 doesn't get would drop him through)
+        for line in havok.probe(glam::Vec3::new(p.0, p.1, p.2)) {
+            if line.contains("surface") {
+                log(format!("spawn floor:{line}"));
+            }
+        }
         {
             // which armour pieces is the player wearing? (for swapping in the Mario model)
             use eldenring::cs::{EquipParamProtector, SoloParamRepository};
