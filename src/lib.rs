@@ -804,6 +804,16 @@ fn input_task() {
         MENU_OPEN.store(!routed, Ordering::Relaxed);
     }
     const ACTION: u64 = 1 << 4; // interact (doors, chests, graces, messages...)
+    // research (debug): which action bits a press makes, to find what NPC dialogue listens to
+    if debug() {
+        static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let presses = *bits(&mut req.new_action_presses);
+        if presses != 0 && LAST.swap(presses, Ordering::Relaxed) != presses {
+            log(format!("input: action presses {presses:#x} (requests {:#x}, possible {:#x})", *bits(&mut req.action_requests), *bits(&mut req.possible_action_inputs)));
+        } else if presses == 0 {
+            LAST.store(0, Ordering::Relaxed);
+        }
+    }
     if *bits(&mut req.new_action_presses) & ACTION != 0 {
         INTERACT_PRESSED.store(true, Ordering::Relaxed);
     }
