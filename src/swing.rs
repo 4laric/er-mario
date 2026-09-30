@@ -26,9 +26,10 @@ const OPEN_FOR: f32 = 3.0;
 /// (its death ragdoll, never used here). Amount 1 = all ragdoll.
 const RAGDOLL_FULL: f32 = 0.99;
 const DOWN_FOR: f32 = 2.0;
-/// Widest boss (m) that goes ragdoll when thrown. Bigger ones (mounted bosses, giants) hung the
-/// game in the death ragdoll: they fly and land without it.
-const RAGDOLL_MAX_RADIUS: f32 = 1.0;
+/// Bosses wider than this (m) are "big" (mounted bosses, giants): a long death ragdoll on one hung
+/// the game, so theirs ends BIG_DOWN_FOR after the impact instead of once they lie still.
+const BIG_RADIUS: f32 = 1.0;
+const BIG_DOWN_FOR: f32 = 1.5;
 const GET_UP: f32 = 1.0;
 
 fn ragdoll_on() -> bool {
@@ -152,6 +153,8 @@ struct State {
     spin: f32,
     /// the downed boss's last position and how long he's lain still
     rest: (Vec3, f32),
+    /// the grabbed boss is big (see BIG_RADIUS)
+    big: bool,
     /// the thrown boss's HP floor while flying / lying (nothing but the throw's own impact may
     /// take more: the game's fall damage would kill him)
     guard_hp: i32,
@@ -160,7 +163,7 @@ struct State {
 }
 
 static STATE: Mutex<State> =
-    Mutex::new(State { phase: Phase::Idle, falling: 0.0, open: Vec::new(), toughness: Vec::new(), meter: Vec::new(), last_face: None, spin: 0.0, rest: (Vec3::ZERO, 0.0), guard_hp: 0, home: Vec3::ZERO });
+    Mutex::new(State { phase: Phase::Idle, falling: 0.0, open: Vec::new(), toughness: Vec::new(), meter: Vec::new(), last_face: None, spin: 0.0, rest: (Vec3::ZERO, 0.0), big: false, guard_hp: 0, home: Vec3::ZERO });
 /// the stagger cue to play (SM64 thread)
 static CUE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -254,6 +257,7 @@ pub fn try_grab(h: &FieldInsHandle, radius_m: f32) -> bool {
     let Some(i) = st.open.iter().position(|(o, _)| key(o) == k) else { return false };
     st.open.remove(i);
     st.phase = Phase::Held { boss: *h, reach: radius_m + 0.9 };
+    st.big = radius_m > BIG_RADIUS;
     st.last_face = None;
     st.spin = 0.0;
     START.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -309,7 +313,12 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
             let left = until.saturating_duration_since(Instant::now()).as_secs_f32();
             let waited = DOWN_FOR + GET_UP - left;
             let at_rest = st.rest.1 > 0.5 || (waited > 8.0 && v < 3.0);
-            if left > 0.0 || !at_rest {
+            if st.big && waited >= BIG_DOWN_FOR {
+                log(format!("swing: big boss ragdoll ends {waited:.1} s after the impact (moving {v:.1} m/s)"));
+                set_ragdoll(chr, 0.0);
+                log("swing: boss back on his feet");
+                st.phase = Phase::Idle;
+            } else if left > 0.0 || !at_rest {
                 set_ragdoll(chr, RAGDOLL_FULL);
             } else {
                 set_ragdoll(chr, 0.0);
@@ -436,7 +445,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                     // (experiment, boss_ragdoll = on) he collapses where he hit: the game's
                     // blendable ragdoll (state 4), not its death ragdoll (state 2). Not in the air:
                     // the ragdoll's bodies don't get his flight's speed and would stretch him
-                    if ragdoll_on() && radius <= RAGDOLL_MAX_RADIUS && chr.chr_ctrl.ragdoll_ins != 0 {
+                    if ragdoll_on() && chr.chr_ctrl.ragdoll_ins != 0 {
                         set_ragdoll(chr, RAGDOLL_FULL);
                         log("swing: ragdoll on impact");
                     }
@@ -458,7 +467,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                     st.guard_hp = 0;
                     Some((boss, IMPACT_MAX))
                 }
-                _ if ragdoll_on() && radius <= RAGDOLL_MAX_RADIUS && chr.chr_ctrl.ragdoll_ins != 0 && since.elapsed().as_secs_f32() > 0.1 => {
+                _ if ragdoll_on() && chr.chr_ctrl.ragdoll_ins != 0 && since.elapsed().as_secs_f32() > 0.1 => {
                     // a few frames of guided flight gave his ragdoll's bodies the throw's speed:
                     // limp from here, the physics flies him (gravity, collision)
                     set_ragdoll(chr, RAGDOLL_FULL);
