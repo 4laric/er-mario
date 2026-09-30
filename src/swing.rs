@@ -51,6 +51,18 @@ fn set_ragdoll(chr: &mut eldenring::cs::ChrIns, amount: f32) {
     }
 }
 
+/// While thrown and down: no falling as far as the game is concerned (its fall damage kills), and
+/// his HP no lower than `guard` (0 = not set yet).
+fn protect(chr: &mut eldenring::cs::ChrIns, guard: &mut i32) {
+    chr.modules.fall.fall_timer = 0.0;
+    let hp = chr.modules.data.hp;
+    if *guard <= 0 {
+        *guard = hp;
+    } else if hp < *guard {
+        chr.modules.data.hp = *guard;
+    }
+}
+
 /// Whether this boss is lying there after a throw (no damage then).
 pub fn is_down(h: &FieldInsHandle) -> bool {
     let st = STATE.lock().unwrap_or_else(|e| e.into_inner());
@@ -97,10 +109,13 @@ struct State {
     spin: f32,
     /// the downed boss's last position and how long he's lain still
     rest: (Vec3, f32),
+    /// the thrown boss's HP floor while flying / lying (nothing but the throw's own impact may
+    /// take more: the game's fall damage would kill him)
+    guard_hp: i32,
 }
 
 static STATE: Mutex<State> =
-    Mutex::new(State { phase: Phase::Idle, open: Vec::new(), toughness: Vec::new(), meter: Vec::new(), last_face: None, spin: 0.0, rest: (Vec3::ZERO, 0.0) });
+    Mutex::new(State { phase: Phase::Idle, open: Vec::new(), toughness: Vec::new(), meter: Vec::new(), last_face: None, spin: 0.0, rest: (Vec3::ZERO, 0.0), guard_hp: 0 });
 /// the stagger cue to play (SM64 thread)
 static CUE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -233,6 +248,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                 st.phase = Phase::Idle;
                 return None;
             };
+            protect(chr, &mut st.guard_hp);
             // he gets back up only once he's lying still (switching a ragdoll off while it still
             // tumbles crashed the game): barely moving for half a second, at least DOWN_FOR after
             // landing, and after 8 s once he's merely slow
@@ -257,6 +273,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                 st.phase = Phase::Idle;
                 return None;
             };
+            protect(chr, &mut st.guard_hp);
             let p = chr.modules.physics.position;
             let now = Vec3::new(p.0, p.1, p.2);
             let v = (now - last).length() / dt.max(1e-3);
@@ -277,6 +294,8 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                 log(format!("swing: limp boss landed at {speed:.1} m/s (stopped {stopped}, map {into_map}): {pct:.0}% of his HP"));
                 st.phase = Phase::Down { boss, until: Instant::now() + std::time::Duration::from_secs_f32(DOWN_FOR + GET_UP) };
                 st.rest = (now, 0.0);
+                // the guard takes his HP after this impact's damage as the new floor
+                st.guard_hp = 0;
                 return Some((boss, pct));
             }
             st.phase = Phase::Limp { boss, last: now, peak: speed, since, still, frames: frames + 1 };
@@ -306,6 +325,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                 let vel = fwd * speed + Vec3::Y * 9.0;
                 let pos = Vec3::new(ph.position.0, ph.position.1, ph.position.2);
                 log(format!("swing: thrown at {speed:.1} m/s"));
+                st.guard_hp = 0;
                 let radius = (reach - 0.9).max(0.4);
                 st.phase = Phase::Flying { boss, pos, vel, since: Instant::now(), radius };
                 None
@@ -321,6 +341,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                 st.phase = Phase::Idle;
                 return None;
             };
+            protect(chr, &mut st.guard_hp);
             let ph = &mut chr.modules.physics;
             let mut vel = vel;
             vel.y -= GRAVITY * dt;
@@ -353,6 +374,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                     };
                     let pct = IMPACT_MIN + (IMPACT_MAX - IMPACT_MIN) * ((speed - 10.0) / 30.0).clamp(0.0, 1.0);
                     log(format!("swing: boss hit something at {speed:.1} m/s: {pct:.0}% of his HP"));
+                    st.guard_hp = 0;
                     Some((boss, pct))
                 }
                 _ if since.elapsed().as_secs_f32() > 4.0 => {
