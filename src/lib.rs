@@ -489,7 +489,7 @@ fn havok_surfaces(h: &mut havok_col::HavokCollision, origin: [f32; 3], mario: [f
         .filter(|(t, layer, body)| {
             // layer 0x37 (detailed map collision the character walks on) and 0x1e (physics props) are
             // invisible to the game's rays, so the ray check can't confirm them: trust them
-            let ok = *layer == 0x37 || *layer == 0x1e || game_confirms(player, t);
+            let ok = *layer == 0x37 || *layer == 0x1e || h.is_boxed(*body) || game_confirms(player, t);
             let e = per_body.entry(*body).or_insert((*layer, 0, 0));
             e.1 += 1;
             e.2 += ok as u32;
