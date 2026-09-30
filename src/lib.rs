@@ -259,8 +259,11 @@ fn world_paused(player: &PlayerIns) -> bool {
     let a = &t.anim_queue[(t.read_idx % 10) as usize];
     let mut clock = CLOCK.lock().unwrap_or_else(|e| e.into_inner());
     let now = std::time::Instant::now();
+    // a hit that launches the Tarnished into the air stalls his animation until he lands, and
+    // he only lands when Mario moves him: in the air a stalled clock is not a pause
+    let airborne = !player.chr_ins.modules.physics.is_touching_ground;
     let still = match *clock {
-        Some((id, time, since)) if id == a.anim_id && time == a.play_time => since.elapsed().as_secs_f32() > 0.3,
+        Some((id, time, since)) if id == a.anim_id && time == a.play_time => since.elapsed().as_secs_f32() > 0.3 && !airborne,
         _ => {
             *clock = Some((a.anim_id, a.play_time, now));
             false
