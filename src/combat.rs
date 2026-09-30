@@ -305,6 +305,15 @@ pub fn nearby(center: &HavokPosition, range: f32, origin: [f32; 3]) -> Vec<Targe
     out
 }
 
+/// Whether Mario can pick this character up (a regular enemy: not a boss, not on his side).
+fn liftable(handle: &FieldInsHandle) -> bool {
+    if is_boss(handle) {
+        return false;
+    }
+    let Ok(wcm) = (unsafe { WorldChrMan::instance() }) else { return false };
+    wcm.chr_ins_by_handle(handle).is_some_and(|c| !own_side(c.team_type) && c.team_type != TEAM_STRONG_ENEMY)
+}
+
 /// Whether a character is a boss right now (its health bar is on screen).
 fn is_boss(handle: &FieldInsHandle) -> bool {
     let key = handle_key(handle);
@@ -535,8 +544,16 @@ impl Combat {
             if let Some(handle) = &target.handle {
                 // a thrown boss in the air or lying limp: no hit at all (not even the game's own,
                 // which could finish a ragdolled character)
-                if crate::swing::is_down(handle) {
+                if crate::swing::is_down(handle) || crate::carry::is_carried(handle) {
                     continue;
+                }
+                // a regular enemy punched from behind: Mario picks it up like a Bob-omb (carry.rs)
+                if matches!(attack, Attack::Punch) && liftable(handle) {
+                    let me = player.modules.physics.position;
+                    if crate::carry::try_pick_up(handle, glam::Vec3::new(me.0, me.1, me.2), target.radius / 100.0, target.height / 100.0) {
+                        self.victims.insert(target.key, (*handle, tick));
+                        continue;
+                    }
                 }
                 // a boss with a broken stance: this hit grabs him by the tail (swing.rs)
                 if crate::swing::try_grab(handle, target.radius / 100.0) {

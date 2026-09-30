@@ -168,5 +168,8 @@ unsafe extern "C" {
     /// er-mario patch: SM64's C-up head look (radians, relative to his body; active 0 = off)
     pub fn sm64_er_set_head(active: i32, pitch: f32, yaw: f32);
     pub fn sm64_er_set_ladder(rate: f32);
+    pub fn sm64_er_pick_up(id: i32);
+    pub fn sm64_er_held(id: i32, pos: *mut f32) -> i32;
+    pub fn sm64_er_drop(id: i32);
     pub fn sm64_er_get_parts(matrices: *mut f32, tri_part: *mut i32, local_pos: *mut f32, local_normal: *mut f32) -> i32;
 }

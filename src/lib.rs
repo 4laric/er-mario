@@ -6,6 +6,7 @@
 
 mod assets;
 mod audio;
+mod carry;
 mod collision;
 mod coins;
 mod combat;
@@ -1313,6 +1314,28 @@ fn frame(data: &FD4TaskData) {
             combat::impact(&mut m.combat, &boss, pct, m.ticks);
             worker::call("impact sound", |_| unsafe { sm64::sm64_play_sound_global(swing::SOUND_IMPACT) });
         }
+        // an enemy picked up like a Bob-omb: carried between Mario's hands, thrown with B
+        let id = m.id;
+        let hands = worker::call("held", move |_| {
+            let mut p = [0f32; 3];
+            (unsafe { sm64::sm64_er_held(id, p.as_mut_ptr()) } != 0).then_some(p)
+        })
+        .flatten()
+        .map(|p| {
+            let e = to_er(m.origin, p);
+            if p == [0.0; 3] { glam::Vec3::ZERO } else { glam::Vec3::new(e.0, e.1, e.2) }
+        });
+        let impact = carry::update(data.delta_time.time, hands, m.state.face_angle, m.state.action, |from, to| {
+            let h = havok?;
+            let d = to - from;
+            h.phys_world
+                .cast_ray(RAY_FILTER, &HavokPosition(from.x, from.y, from.z, 0.0), eldenring::position::PositionDelta(d.x, d.y, d.z), player_ref)
+                .map(|h| glam::Vec3::new(h.0, h.1, h.2))
+        });
+        if let Some((mob, pct)) = impact {
+            combat::impact(&mut m.combat, &mob, pct, m.ticks);
+            worker::call("impact sound", |_| unsafe { sm64::sm64_play_sound_global(carry::SOUND_IMPACT) });
+        }
     }
     let st = stats::get();
     hud::set_counters(st.deaths, st.coins, st.stars);
@@ -1387,6 +1410,7 @@ fn frame(data: &FD4TaskData) {
         stats::update(|s| s.deaths += 1);
         coins::clear();
         swing::reset();
+        carry::reset();
     } else if m.dead && hp > 0 {
         log("respawned: recreating Mario");
         m.moving.clear(&mut m.havok);
@@ -1562,7 +1586,7 @@ fn frame(data: &FD4TaskData) {
         let hurt = {
             let data = &player_ref.chr_ins.modules.data;
             // holding a boss by the tail: his swings don't reach Mario (they broke the grab)
-            let hurt = m.combat.took_damage(data.hp, data.max_hp).filter(|_| !m.dead && !swing::holding());
+            let hurt = m.combat.took_damage(data.hp, data.max_hp).filter(|_| !m.dead && !swing::holding() && !carry::holding());
             if !m.dead && data.hp > 0 {
                 set_player_hp(data.max_hp);
             }
@@ -1600,6 +1624,8 @@ fn frame(data: &FD4TaskData) {
         let health_before = m.state.health;
         let head = lakitu::head();
         let grab = swing::take_start();
+        let pick_up = carry::take_start();
+        let put_down = carry::take_drop();
         let stagger_cue = swing::take_cue();
         let action_before = m.state.action;
         let alive = !m.dead;
@@ -1670,6 +1696,13 @@ fn frame(data: &FD4TaskData) {
             if grab {
                 unsafe { sm64::sm64_set_mario_action(id, swing::ACT_PICKING_UP_BOWSER) };
                 unsafe { sm64::sm64_play_sound_global(swing::SOUND_GRAB) };
+            }
+            // an enemy picked up like a Bob-omb (SM64's pickup and carrying, carry.rs)
+            if pick_up {
+                unsafe { sm64::sm64_er_pick_up(id) };
+            }
+            if put_down {
+                unsafe { sm64::sm64_er_drop(id) };
             }
             if stagger_cue {
                 unsafe { sm64::sm64_play_sound_global(swing::SOUND_STAGGER) };
