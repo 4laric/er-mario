@@ -1023,6 +1023,20 @@ fn frame(data: &FD4TaskData) {
     if guard.is_none() && CREATE_RETRY.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|t| t.elapsed().as_secs_f32() < 1.0) {
         return;
     }
+    // Mario only once the game has solid ground right under the player: after a respawn the
+    // floor there may still be loading while something lower (a cave, the terrain under a
+    // building) already is, and Mario would be put on that, under the floor
+    if guard.is_none() {
+        let p = physics.position;
+        let ground = unsafe { eldenring::cs::CSHavokMan::instance() }.ok().and_then(|h| {
+            h.phys_world.cast_ray(RAY_FILTER, &HavokPosition(p.0, p.1 + 1.0, p.2, 0.0), eldenring::position::PositionDelta(0.0, -4.0, 0.0), player_ref)
+        });
+        if ground.is_none() {
+            *CREATE_RETRY.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
+            log("waiting for the ground under the player before creating Mario");
+            return;
+        }
+    }
     let m = guard.get_or_insert_with(|| {
         let p = physics.position;
         let feet = [p.0, p.1, p.2];
