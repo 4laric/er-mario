@@ -1533,7 +1533,8 @@ fn frame(data: &FD4TaskData) {
         // SM64's health is Mario's: Elden Ring hits cost wedges, and the Tarnished's HP is kept full
         let hurt = {
             let data = &player_ref.chr_ins.modules.data;
-            let hurt = m.combat.took_damage(data.hp, data.max_hp).filter(|_| !m.dead);
+            // holding a boss by the tail: his swings don't reach Mario (they broke the grab)
+            let hurt = m.combat.took_damage(data.hp, data.max_hp).filter(|_| !m.dead && !swing::holding());
             if !m.dead && data.hp > 0 {
                 set_player_hp(data.max_hp);
             }
@@ -1593,7 +1594,8 @@ fn frame(data: &FD4TaskData) {
             && !ANIM_SIDESTEP.contains(&m.state.anim_id);
         let hovering = m.state.action & ACT_FLAG_AIR != 0;
         let still = glam::Vec3::from(m.state.position).distance(glam::Vec3::from(m.prev_pos)) < 1.0;
-        if (pushing || hovering) && still && !m.dead && !FOLLOWING.load(Ordering::Relaxed) {
+        // standing still is normal with a boss by the tail
+        if (pushing || hovering) && still && !m.dead && !FOLLOWING.load(Ordering::Relaxed) && !swing::holding() {
             m.stuck_ticks += 1;
         } else {
             m.stuck_ticks = 0;

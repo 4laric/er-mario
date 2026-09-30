@@ -88,6 +88,11 @@ fn hold_at(chr: &mut eldenring::cs::ChrIns, home: Vec3) {
     unsafe { *((&mut **fall as *mut eldenring::cs::CSChrFallModule as *mut u8).add(0x1C)) = 0 };
 }
 
+/// Whether Mario has a boss by the tail (the boss can't hurt him then).
+pub fn holding() -> bool {
+    matches!(STATE.lock().unwrap_or_else(|e| e.into_inner()).phase, Phase::Held { .. })
+}
+
 /// Whether this boss is lying there after a throw (no damage then).
 pub fn is_down(h: &FieldInsHandle) -> bool {
     let st = STATE.lock().unwrap_or_else(|e| e.into_inner());
@@ -388,6 +393,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
             } else {
                 // let go some other way (hurt, fell): just drop him
                 ph.gravity_disabled = false;
+                log(format!("swing: let go without a throw (action {action:#x})"));
                 st.phase = Phase::Idle;
                 None
             }
