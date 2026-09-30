@@ -2045,6 +2045,30 @@ fn frame(data: &FD4TaskData) {
         }
     }
 
+    // F2 (debug): every Site of Grace unlocked (their "lit" event flags from BonfireWarpParam),
+    // for testing around the world. Offline Mario save only.
+    {
+        static F2_WAS: AtomicBool = AtomicBool::new(false);
+        let f2 = debug_key(0x71);
+        if f2 && !F2_WAS.swap(true, Ordering::Relaxed) {
+            use eldenring::cs::{BonfireWarpParam, CSEventFlagMan, SoloParamRepository};
+            if let (Ok(repo), Ok(flags)) = (unsafe { SoloParamRepository::instance() }, unsafe { CSEventFlagMan::instance_mut() }) {
+                let mut n = 0;
+                for i in 0..4000 {
+                    let Some(row) = repo.get_row_by_index::<BonfireWarpParam>(i) else { break };
+                    let flag = row.eventflag_id();
+                    if flag != 0 {
+                        flags.virtual_memory_flag.set_flag(flag, true);
+                        n += 1;
+                    }
+                }
+                log(format!("graces: {n} unlocked"));
+            }
+        } else if !f2 {
+            F2_WAS.store(false, Ordering::Relaxed);
+        }
+    }
+
     // F5: probe the ground 1.5 m in front of Mario (which body/layer is there, and the game's ray)
     {
         static F5_WAS: AtomicBool = AtomicBool::new(false);
