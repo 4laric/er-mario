@@ -1321,9 +1321,11 @@ fn frame(data: &FD4TaskData) {
             (unsafe { sm64::sm64_er_held(id, p.as_mut_ptr()) } != 0).then_some(p)
         })
         .flatten()
-        .map(|p| {
-            let e = to_er(m.origin, p);
-            if p == [0.0; 3] { glam::Vec3::ZERO } else { glam::Vec3::new(e.0, e.1, e.2) }
+        // (libsm64 doesn't fill SM64's held-object point, that comes from its camera renderer:
+        // in front of Mario at chest height, like SM64 holds a Bob-omb)
+        .map(|_| {
+            let fa = m.state.face_angle;
+            glam::Vec3::new(me.0, me.1, me.2) + glam::Vec3::new(-fa.sin(), 0.0, fa.cos()) * 0.45 + glam::Vec3::Y * 0.75
         });
         let impact = carry::update(data.delta_time.time, hands, m.state.face_angle, m.state.action, |from, to| {
             let h = havok?;

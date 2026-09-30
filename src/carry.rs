@@ -133,7 +133,7 @@ pub fn update(
                 // (the pickup's first frames: SM64 hasn't placed the hands yet, keep it where it is)
                 Some(p) if p != Vec3::ZERO => {
                     // held around its middle, facing away from Mario like a Bob-omb
-                    let at = p - Vec3::Y * (height * 0.45) + fwd * 0.2;
+                    let at = p - Vec3::Y * (height * 0.45) + fwd * 0.25;
                     ph.position = HavokPosition(at.x, at.y, at.z, 0.0);
                     ph.chr_proxy_pos_update_requested = true;
                     ph.gravity_disabled = true;
