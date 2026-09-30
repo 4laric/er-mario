@@ -311,7 +311,23 @@ fn liftable(handle: &FieldInsHandle) -> bool {
         return false;
     }
     let Ok(wcm) = (unsafe { WorldChrMan::instance() }) else { return false };
-    wcm.chr_ins_by_handle(handle).is_some_and(|c| !own_side(c.team_type) && c.team_type != TEAM_STRONG_ENEMY)
+    wcm.chr_ins_by_handle(handle).is_some_and(|c| !own_side(c.team_type) && !boss_class(handle, c))
+}
+
+/// Characters that have shown a boss bar at some point (the bar only appears once a fight starts).
+static SEEN_BOSSES: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
+/// Big or tough characters count as bosses for damage even before (or without) a boss bar.
+const BOSS_RADIUS: f32 = 1.5;
+const BOSS_MAX_HP: i32 = 2500;
+
+/// Whether a character takes boss damage: a boss bar now or before, the strong-enemy team, or
+/// big / tough enough (a field boss hit before his bar showed took a regular enemy's 50%).
+fn boss_class(handle: &FieldInsHandle, chr: &ChrIns) -> bool {
+    is_boss(handle)
+        || chr.team_type == TEAM_STRONG_ENEMY
+        || SEEN_BOSSES.lock().unwrap_or_else(|e| e.into_inner()).contains(&handle_key(handle))
+        || chr.modules.physics.hit_radius >= BOSS_RADIUS
+        || chr.modules.data.max_hp >= BOSS_MAX_HP
 }
 
 /// Whether a character is a boss right now (its health bar is on screen).
@@ -390,9 +406,17 @@ pub fn impact(combat: &mut Combat, handle: &FieldInsHandle, pct: f32, tick: u32)
 
 /// The bosses on screen (their boss bars).
 pub fn boss_handles() -> Vec<FieldInsHandle> {
-    unsafe { eldenring::cs::CSFeManImp::instance() }
+    let handles: Vec<FieldInsHandle> = unsafe { eldenring::cs::CSFeManImp::instance() }
         .map(|fe| fe.boss_health_displays.iter().filter(|e| !e.field_ins_handle.is_empty()).map(|e| e.field_ins_handle).collect())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let mut seen = SEEN_BOSSES.lock().unwrap_or_else(|e| e.into_inner());
+    for h in &handles {
+        let k = handle_key(h);
+        if !seen.contains(&k) {
+            seen.push(k);
+        }
+    }
+    handles
 }
 
 fn boss_keys() -> Vec<u64> {
@@ -451,7 +475,7 @@ fn take_share(handle: &FieldInsHandle, attack: Attack) -> bool {
         log(format!("combat: team {team} is on the player's side, no damage"));
         return false;
     }
-    let boss = bar || team == TEAM_STRONG_ENEMY;
+    let boss = bar || boss_class(handle, chr);
     let (default, key) = attack.percent();
     let mut pct = config_f32(key, default);
     if boss {
