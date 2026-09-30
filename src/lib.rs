@@ -548,8 +548,12 @@ fn havok_surfaces(h: &mut havok_col::HavokCollision, origin: [f32; 3], mario: [f
         // Havok collision is two-sided, SM64 surfaces are not: face each triangle the way Mario
         // meets it. Flat below head height = floor (up), flat above = ceiling (down), else wall
         // facing Mario.
+        // (a long ramp's centre can be far up the slope: judge it by its height where Mario is)
         let want = if n.y.abs() > 0.2 {
-            if centroid.y < m.y + 120.0 { glam::Vec3::Y } else { -glam::Vec3::Y }
+            let lo = a.y.min(b.y).min(c.y);
+            let hi = a.y.max(b.y).max(c.y);
+            let here = (a.y - (n.x * (m.x - a.x) + n.z * (m.z - a.z)) / n.y).clamp(lo, hi);
+            if here < m.y + 120.0 { glam::Vec3::Y } else { -glam::Vec3::Y }
         } else {
             let to_mario = m - centroid;
             glam::Vec3::new(to_mario.x, 0.0, to_mario.z)
