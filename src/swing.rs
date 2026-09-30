@@ -130,6 +130,13 @@ pub fn holding() -> bool {
     matches!(STATE.lock().unwrap_or_else(|e| e.into_inner()).phase, Phase::Held { .. })
 }
 
+/// Whether Mario is doing something with this boss (holding, throwing, or he's down or settling
+/// from a throw): his final blow waits for the throw's impact.
+pub fn busy_with(h: &FieldInsHandle) -> bool {
+    let st = STATE.lock().unwrap_or_else(|e| e.into_inner());
+    matches!(st.phase, Phase::Held { boss, .. } | Phase::Flying { boss, .. } | Phase::Limp { boss, .. } | Phase::Down { boss, .. } | Phase::Settling { boss, .. } if key(&boss) == key(h))
+}
+
 /// Whether this boss is lying there after a throw (no damage then).
 pub fn is_down(h: &FieldInsHandle) -> bool {
     let st = STATE.lock().unwrap_or_else(|e| e.into_inner());

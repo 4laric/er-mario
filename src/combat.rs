@@ -372,16 +372,15 @@ pub fn tags() -> Vec<crate::hud::Tag> {
         .collect()
 }
 
-/// A thrown boss hit something: `pct` of his max HP (the last point is left for the game, like
-/// Mario's hits; the fallback finishes him if nothing else does).
+/// A thrown character hit something: `pct` of its max HP, lethal if that's all it had left.
 pub fn impact(combat: &mut Combat, handle: &FieldInsHandle, pct: f32, tick: u32) {
     let Ok(wcm) = (unsafe { WorldChrMan::instance_mut() }) else { return };
     let Some(chr) = wcm.chr_ins_by_handle_mut(handle) else { return };
     let data = &mut chr.modules.data;
     let (hp, max) = (data.hp, data.max_hp.max(1));
     let dmg = ((max as f32 * pct / 100.0).ceil() as i32).max(1);
-    // (a lethal impact, like a thrown enemy's, kills right there)
-    data.hp = if pct >= 100.0 { 0 } else { (hp - dmg).max(1) };
+    // (throws kill right there when the impact takes the rest of his HP)
+    data.hp = (hp - dmg).max(0);
     show_damage(handle, hp, hp - data.hp, true);
     if data.hp == 1 {
         combat.finishing.entry(handle_key(handle)).or_insert((*handle, tick));
@@ -522,7 +521,8 @@ impl Combat {
         // the final blow is the bullet's; if it can't land (some small or odd characters), finish
         // them after 0.5 s
         self.finishing.retain(|_, (handle, t)| {
-            if tick.wrapping_sub(*t) < 15 {
+            // (a boss Mario has grabbed or thrown: the throw's impact deals the final blow)
+            if tick.wrapping_sub(*t) < 15 || crate::swing::busy_with(handle) {
                 return true;
             }
             if let Some(chr) = unsafe { WorldChrMan::instance_mut() }.ok().and_then(|w| w.chr_ins_by_handle_mut(handle)) {
