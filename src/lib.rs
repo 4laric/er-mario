@@ -222,9 +222,9 @@ fn hud_task() {
     let Ok(fe) = (unsafe { eldenring::cs::CSFeManImp::instance_mut() }) else { return };
     use eldenring::cs::CSFeManHudState as Hud;
     let mario = ENABLED.load(Ordering::Relaxed) && IN_WORLD.load(Ordering::Relaxed);
-    // PopupMenu, not HideAll: it hides the HP / FP / stamina bars too but keeps NPC subtitles
-    // (HideAll took them along)
-    let hidden = Hud::PopupMenu;
+    // HideAll: nothing of Elden Ring's HUD (it takes NPC subtitles along; PopupMenu kept them but
+    // also showed other HUD pieces that break the Mario look, his call: no subtitles)
+    let hidden = Hud::HideAll;
     if mario {
         // Elden Ring's own bars are hidden (the enemies' health bars are the overlay's, hud.rs)
         if matches!(fe.hud_state, Hud::Default) || (HIDDEN.load(Ordering::Relaxed) && fe.hud_state != hidden && !matches!(fe.hud_state, Hud::Default) && !gameover::showing() && !game_menu_open()) {
