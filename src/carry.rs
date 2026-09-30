@@ -1,0 +1,203 @@
+//! Picking enemies up like SM64's Bob-ombs: Mario's punch from behind lifts a regular (not boss,
+//! not too big) enemy, he carries it between his hands (SM64's own carrying: walk, jump), and B
+//! throws it; whatever it hits first hurts it badly.
+
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
+
+use eldenring::cs::{FieldInsHandle, WorldChrMan};
+use eldenring::position::HavokPosition;
+use fromsoftware_shared::FromStatic;
+use glam::Vec3;
+
+use crate::log;
+
+/// SM64's throwing actions (on the ground, in the air)
+const ACT_THROWING: u32 = 0x8000_0588;
+const ACT_AIR_THROW: u32 = 0x8300_08AB;
+/// SOUND_MARIO_HRMM is played by SM64's pickup itself; the throw's impact
+pub const SOUND_IMPACT: i32 = 0x312F_0081;
+/// Biggest enemy Mario can lift (m): about a soldier
+const MAX_RADIUS: f32 = 0.8;
+const MAX_HEIGHT: f32 = 2.4;
+/// Throw: speed forward and up (m/s), gravity (m/s²)
+const THROW_SPEED: f32 = 14.0;
+const THROW_UP: f32 = 5.0;
+const GRAVITY: f32 = 16.0;
+/// Impact damage: share of the enemy's max HP
+pub const IMPACT_PCT: f32 = 60.0;
+
+enum Phase {
+    Idle,
+    /// Mario lifts / carries it: (enemy, its height in m)
+    Held { mob: FieldInsHandle, height: f32, since: Instant },
+    Flying { mob: FieldInsHandle, pos: Vec3, vel: Vec3, since: Instant, radius: f32 },
+}
+
+static PHASE: Mutex<Phase> = Mutex::new(Phase::Idle);
+/// A pickup just started: the SM64 tick puts Mario into SM64's pickup
+static START: AtomicBool = AtomicBool::new(false);
+/// Mario must let go (the enemy is gone or died)
+static DROP: AtomicBool = AtomicBool::new(false);
+
+fn key(h: &FieldInsHandle) -> u64 {
+    unsafe { std::mem::transmute_copy::<FieldInsHandle, u64>(h) }
+}
+
+/// Mario's punch landed on `h` (a regular enemy): lifts it if Mario is behind it and it isn't too
+/// big. True: picked up (no normal damage).
+pub fn try_pick_up(h: &FieldInsHandle, mario: Vec3, radius_m: f32, height_m: f32) -> bool {
+    let mut phase = PHASE.lock().unwrap_or_else(|e| e.into_inner());
+    if !matches!(*phase, Phase::Idle) || radius_m > MAX_RADIUS || height_m > MAX_HEIGHT {
+        return false;
+    }
+    let Ok(wcm) = (unsafe { WorldChrMan::instance() }) else { return false };
+    let Some(chr) = wcm.chr_ins_by_handle(h) else { return false };
+    if chr.modules.data.hp <= 0 {
+        return false;
+    }
+    let ph = &chr.modules.physics;
+    let o = ph.orientation;
+    let fwd = glam::Quat::from_xyzw(o.0, o.1, o.2, o.3).mul_vec3(Vec3::new(0.0, 0.0, -1.0));
+    let fwd = Vec3::new(fwd.x, 0.0, fwd.z).normalize_or_zero();
+    let to_mario = Vec3::new(mario.x - ph.position.0, 0.0, mario.z - ph.position.2).normalize_or_zero();
+    // behind it: Mario is on the side its back faces
+    let behind = fwd.dot(to_mario);
+    if behind > -0.5 {
+        return false;
+    }
+    log(format!("carry: picked up an enemy from behind ({:.1} x {:.1} m, facing {behind:.2})", radius_m, height_m));
+    *phase = Phase::Held { mob: *h, height: height_m, since: Instant::now() };
+    START.store(true, Ordering::Relaxed);
+    true
+}
+
+/// SM64 tick: whether to start SM64's pickup now.
+pub fn take_start() -> bool {
+    START.swap(false, Ordering::Relaxed)
+}
+
+/// SM64 tick: whether Mario must let go.
+pub fn take_drop() -> bool {
+    DROP.swap(false, Ordering::Relaxed)
+}
+
+/// Whether Mario carries an enemy (it can't hurt him then).
+pub fn holding() -> bool {
+    matches!(*PHASE.lock().unwrap_or_else(|e| e.into_inner()), Phase::Held { .. })
+}
+
+/// Whether this enemy is in Mario's hands or flying (no normal hits on it).
+pub fn is_carried(h: &FieldInsHandle) -> bool {
+    match &*PHASE.lock().unwrap_or_else(|e| e.into_inner()) {
+        Phase::Held { mob, .. } | Phase::Flying { mob, .. } => key(mob) == key(h),
+        Phase::Idle => false,
+    }
+}
+
+pub fn reset() {
+    *PHASE.lock().unwrap_or_else(|e| e.into_inner()) = Phase::Idle;
+}
+
+/// Every frame in Mario mode. `hands`: SM64's held-object point (game coordinates) and whether
+/// Mario still holds it; `face` Mario's SM64 face angle; `action` his SM64 action; `hit` a map
+/// ray. Returns an impact: (enemy, damage share of max HP in %).
+pub fn update(
+    dt: f32,
+    hands: Option<Vec3>,
+    face: f32,
+    action: u32,
+    hit: impl Fn(Vec3, Vec3) -> Option<Vec3>,
+) -> Option<(FieldInsHandle, f32)> {
+    let Ok(wcm) = (unsafe { WorldChrMan::instance_mut() }) else { return None };
+    let mut phase = PHASE.lock().unwrap_or_else(|e| e.into_inner());
+    // Mario's forward in game coordinates (SM64 is mirrored on X)
+    let fwd = Vec3::new(-face.sin(), 0.0, face.cos());
+    match *phase {
+        Phase::Idle => None,
+        Phase::Held { mob, height, since } => {
+            let Some(chr) = wcm.chr_ins_by_handle_mut(&mob) else {
+                *phase = Phase::Idle;
+                DROP.store(true, Ordering::Relaxed);
+                return None;
+            };
+            if chr.modules.data.hp <= 0 {
+                chr.modules.physics.gravity_disabled = false;
+                *phase = Phase::Idle;
+                DROP.store(true, Ordering::Relaxed);
+                return None;
+            }
+            let ph = &mut chr.modules.physics;
+            match hands {
+                // (the pickup's first frames: SM64 hasn't placed the hands yet, keep it where it is)
+                Some(p) if p != Vec3::ZERO => {
+                    // held around its middle, facing away from Mario like a Bob-omb
+                    let at = p - Vec3::Y * (height * 0.45) + fwd * 0.2;
+                    ph.position = HavokPosition(at.x, at.y, at.z, 0.0);
+                    ph.chr_proxy_pos_update_requested = true;
+                    ph.gravity_disabled = true;
+                    let q = glam::Quat::from_rotation_y(std::f32::consts::PI - face);
+                    ph.orientation = eldenring::rotation::Quaternion(q.x, q.y, q.z, q.w);
+                    chr.modules.fall.fall_timer = 0.0;
+                    None
+                }
+                Some(_) => None,
+                // (SM64 starts the pickup on its next tick: not holding yet isn't letting go)
+                None if START.load(Ordering::Relaxed) || since.elapsed().as_secs_f32() < 0.25 => None,
+                None if action == ACT_THROWING || action == ACT_AIR_THROW => {
+                    let pos = Vec3::new(ph.position.0, ph.position.1, ph.position.2);
+                    let vel = fwd * THROW_SPEED + Vec3::Y * THROW_UP;
+                    log("carry: thrown");
+                    *phase = Phase::Flying { mob, pos, vel, since: Instant::now(), radius: 0.5 };
+                    None
+                }
+                None => {
+                    // let go some other way (Mario got hurt, fell): just drop it
+                    ph.gravity_disabled = false;
+                    log(format!("carry: dropped without a throw (action {action:#x})"));
+                    *phase = Phase::Idle;
+                    None
+                }
+            }
+        }
+        Phase::Flying { mob, pos, vel, since, radius } => {
+            let Some(chr) = wcm.chr_ins_by_handle_mut(&mob) else {
+                *phase = Phase::Idle;
+                return None;
+            };
+            let ph = &mut chr.modules.physics;
+            let mut vel = vel;
+            vel.y -= GRAVITY * dt;
+            let next = pos + vel * dt;
+            let lead = (next - pos).normalize_or_zero() * radius;
+            let impact = hit(pos + Vec3::Y * 0.5, next + lead + Vec3::Y * 0.5).or_else(|| hit(pos + Vec3::Y * 0.5, next - Vec3::Y * 0.1));
+            match impact {
+                Some(h) if since.elapsed().as_secs_f32() > 0.05 => {
+                    let back = (h - pos).normalize_or_zero() * radius;
+                    let rest = h - back;
+                    ph.position = HavokPosition(rest.x, rest.y.max(h.y), rest.z, 0.0);
+                    ph.chr_proxy_pos_update_requested = true;
+                    ph.gravity_disabled = false;
+                    log(format!("carry: thrown enemy hit something at {:.1} m/s: {IMPACT_PCT:.0}% of its HP", vel.length()));
+                    *phase = Phase::Idle;
+                    Some((mob, IMPACT_PCT))
+                }
+                // flew off into nothing: the game's own fall takes it from here
+                _ if since.elapsed().as_secs_f32() > 3.0 => {
+                    ph.gravity_disabled = false;
+                    log("carry: thrown enemy flew off");
+                    *phase = Phase::Idle;
+                    None
+                }
+                _ => {
+                    ph.position = HavokPosition(next.x, next.y, next.z, 0.0);
+                    ph.chr_proxy_pos_update_requested = true;
+                    ph.gravity_disabled = true;
+                    *phase = Phase::Flying { mob, pos: next, vel, since, radius };
+                    None
+                }
+            }
+        }
+    }
+}
