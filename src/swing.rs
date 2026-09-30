@@ -27,42 +27,28 @@ const OPEN_FOR: f32 = 3.0;
 const RAGDOLL_FULL: f32 = 0.99;
 const DOWN_FOR: f32 = 2.0;
 /// A ragdoll going faster than this by itself is running away (on a mounted boss it gained speed
-/// on its own, 41 -> 58 m/s, until the physics hung the game): it's ended at once and that boss
-/// never goes ragdoll again (remembered in NO_RAGDOLL_FILE).
+/// on its own, 41 -> 58 m/s, until the physics hung the game): that throw's ragdoll ends at once.
+/// It only happens on some throws, so the boss keeps his ragdoll for the next ones.
 const RUNAWAY_MIN: f32 = 35.0;
 const RUNAWAY_DOWN: f32 = 30.0;
-const NO_RAGDOLL_FILE: &str = "er_mario_no_ragdoll.txt";
 
-/// Character ids (cXXXX) that never go ragdoll: `no_ragdoll` in er_mario.ini (e.g. "4750, 3251")
-/// and the ones learned from a runaway ragdoll.
+/// Character ids (cXXXX) that never go ragdoll: `no_ragdoll` in er_mario.ini (e.g. "4750, 3251").
 fn no_ragdoll_ids() -> Vec<u32> {
-    let parse = |text: &str| -> Vec<u32> {
-        text.split(|c: char| c == ',' || c.is_whitespace())
-            .filter_map(|t| t.trim().trim_start_matches(['c', 'C']).parse().ok())
-            .collect()
-    };
-    let mut ids = crate::paths::config("no_ragdoll").map(|v| parse(&v)).unwrap_or_default();
-    ids.extend(parse(&std::fs::read_to_string(crate::paths::file(NO_RAGDOLL_FILE)).unwrap_or_default()));
-    ids
+    crate::paths::config("no_ragdoll")
+        .map(|v| v.split(|c: char| c == ',' || c.is_whitespace()).filter_map(|t| t.trim().trim_start_matches(['c', 'C']).parse().ok()).collect())
+        .unwrap_or_default()
 }
 
 fn ragdoll_allowed(chr: &eldenring::cs::ChrIns) -> bool {
     ragdoll_on() && chr.chr_ctrl.ragdoll_ins != 0 && !no_ragdoll_ids().contains(&chr.character_id)
 }
 
-/// A runaway ragdoll: ended now, the boss protected while he settles, his id remembered.
+/// A runaway ragdoll: ended now, the boss protected while he settles.
 fn runaway(chr: &mut eldenring::cs::ChrIns, v: f32) {
     set_ragdoll(chr, 0.0);
     clear_fall(chr);
     chr.modules.physics.gravity_disabled = false;
-    let id = chr.character_id;
-    log(format!("swing: runaway ragdoll on c{id:04} ({v:.1} m/s): ended, never ragdolled again"));
-    let path = crate::paths::file(NO_RAGDOLL_FILE);
-    let mut text = std::fs::read_to_string(&path).unwrap_or_default();
-    if !no_ragdoll_ids().contains(&id) {
-        text.push_str(&format!("{id}\n"));
-        let _ = std::fs::write(&path, text);
-    }
+    log(format!("swing: runaway ragdoll on c{:04} ({v:.1} m/s): ended for this throw", chr.character_id));
 }
 const GET_UP: f32 = 1.0;
 
