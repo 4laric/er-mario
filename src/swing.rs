@@ -26,10 +26,44 @@ const OPEN_FOR: f32 = 3.0;
 /// (its death ragdoll, never used here). Amount 1 = all ragdoll.
 const RAGDOLL_FULL: f32 = 0.99;
 const DOWN_FOR: f32 = 2.0;
-/// Bosses wider than this (m) are "big" (mounted bosses, giants): they never go ragdoll. On a
-/// mounted boss the death ragdoll gains speed by itself (40+ m/s) until the physics hangs the game.
-const BIG_RADIUS: f32 = 1.0;
-const BIG_DOWN_FOR: f32 = 1.5;
+/// A ragdoll going faster than this by itself is running away (on a mounted boss it gained speed
+/// on its own, 41 -> 58 m/s, until the physics hung the game): it's ended at once and that boss
+/// never goes ragdoll again (remembered in NO_RAGDOLL_FILE).
+const RUNAWAY_MIN: f32 = 35.0;
+const RUNAWAY_DOWN: f32 = 30.0;
+const NO_RAGDOLL_FILE: &str = "er_mario_no_ragdoll.txt";
+
+/// Character ids (cXXXX) that never go ragdoll: `no_ragdoll` in er_mario.ini (e.g. "4750, 3251")
+/// and the ones learned from a runaway ragdoll.
+fn no_ragdoll_ids() -> Vec<u32> {
+    let parse = |text: &str| -> Vec<u32> {
+        text.split(|c: char| c == ',' || c.is_whitespace())
+            .filter_map(|t| t.trim().trim_start_matches(['c', 'C']).parse().ok())
+            .collect()
+    };
+    let mut ids = crate::paths::config("no_ragdoll").map(|v| parse(&v)).unwrap_or_default();
+    ids.extend(parse(&std::fs::read_to_string(crate::paths::file(NO_RAGDOLL_FILE)).unwrap_or_default()));
+    ids
+}
+
+fn ragdoll_allowed(chr: &eldenring::cs::ChrIns) -> bool {
+    ragdoll_on() && chr.chr_ctrl.ragdoll_ins != 0 && !no_ragdoll_ids().contains(&chr.character_id)
+}
+
+/// A runaway ragdoll: ended now, the boss protected while he settles, his id remembered.
+fn runaway(chr: &mut eldenring::cs::ChrIns, v: f32) {
+    set_ragdoll(chr, 0.0);
+    clear_fall(chr);
+    chr.modules.physics.gravity_disabled = false;
+    let id = chr.character_id;
+    log(format!("swing: runaway ragdoll on c{id:04} ({v:.1} m/s): ended, never ragdolled again"));
+    let path = crate::paths::file(NO_RAGDOLL_FILE);
+    let mut text = std::fs::read_to_string(&path).unwrap_or_default();
+    if !no_ragdoll_ids().contains(&id) {
+        text.push_str(&format!("{id}\n"));
+        let _ = std::fs::write(&path, text);
+    }
+}
 const GET_UP: f32 = 1.0;
 
 fn ragdoll_on() -> bool {
@@ -164,8 +198,8 @@ struct State {
     spin: f32,
     /// the downed boss's last position and how long he's lain still
     rest: (Vec3, f32),
-    /// the grabbed boss is big (see BIG_RADIUS)
-    big: bool,
+    /// the speed the boss went limp at (a ragdoll much faster than that is running away)
+    throw_speed: f32,
     /// the thrown boss's HP floor while flying / lying (nothing but the throw's own impact may
     /// take more: the game's fall damage would kill him)
     guard_hp: i32,
@@ -174,7 +208,7 @@ struct State {
 }
 
 static STATE: Mutex<State> =
-    Mutex::new(State { phase: Phase::Idle, falling: 0.0, open: Vec::new(), toughness: Vec::new(), meter: Vec::new(), last_face: None, spin: 0.0, rest: (Vec3::ZERO, 0.0), big: false, guard_hp: 0, home: Vec3::ZERO });
+    Mutex::new(State { phase: Phase::Idle, falling: 0.0, open: Vec::new(), toughness: Vec::new(), meter: Vec::new(), last_face: None, spin: 0.0, rest: (Vec3::ZERO, 0.0), throw_speed: 0.0, guard_hp: 0, home: Vec3::ZERO });
 /// the stagger cue to play (SM64 thread)
 static CUE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -287,7 +321,6 @@ pub fn try_grab(h: &FieldInsHandle, radius_m: f32) -> bool {
     let Some(i) = st.open.iter().position(|(o, _)| key(o) == k) else { return false };
     st.open.remove(i);
     st.phase = Phase::Held { boss: *h, reach: radius_m + 0.9 };
-    st.big = radius_m > BIG_RADIUS;
     st.last_face = None;
     st.spin = 0.0;
     START.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -343,11 +376,9 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
             let left = until.saturating_duration_since(Instant::now()).as_secs_f32();
             let waited = DOWN_FOR + GET_UP - left;
             let at_rest = st.rest.1 > 0.5 || (waited > 8.0 && v < 3.0);
-            if st.big && waited >= BIG_DOWN_FOR {
-                log(format!("swing: big boss ragdoll ends {waited:.1} s after the impact (moving {v:.1} m/s)"));
-                set_ragdoll(chr, 0.0);
-                log("swing: boss back on his feet");
-                st.phase = Phase::Idle;
+            if waited > 0.3 && v > RUNAWAY_DOWN {
+                runaway(chr, v);
+                st.phase = Phase::Settling { boss, until: Instant::now() + std::time::Duration::from_secs(2) };
             } else if left > 0.0 || !at_rest {
                 set_ragdoll(chr, RAGDOLL_FULL);
             } else {
@@ -408,6 +439,12 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
             let speed = if settle { peak } else { peak * 0.6 + v * 0.4 };
             let still = if v < 1.0 { still + dt } else { 0.0 };
             let age = since.elapsed().as_secs_f32();
+            if !settle && v > (st.throw_speed * 1.4).max(RUNAWAY_MIN) {
+                runaway(chr, v);
+                st.phase = Phase::Settling { boss, until: Instant::now() + std::time::Duration::from_secs(2) };
+                st.guard_hp = 0;
+                return None;
+            }
             // falling nonstop (a frame of real drop, not the ragdoll's jitter)
             st.falling = if now.y < last.y - 0.01 { st.falling + dt } else { 0.0 };
             if off_the_map(chr, st.home, st.falling) {
@@ -496,7 +533,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                     // (experiment, boss_ragdoll = on) he collapses where he hit: the game's
                     // blendable ragdoll (state 4), not its death ragdoll (state 2). Not in the air:
                     // the ragdoll's bodies don't get his flight's speed and would stretch him
-                    if ragdoll_on() && !st.big && chr.chr_ctrl.ragdoll_ins != 0 {
+                    if ragdoll_allowed(chr) {
                         set_ragdoll(chr, RAGDOLL_FULL);
                         log("swing: ragdoll on impact");
                     }
@@ -518,12 +555,13 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                     st.guard_hp = 0;
                     Some((boss, IMPACT_MAX))
                 }
-                _ if ragdoll_on() && !st.big && chr.chr_ctrl.ragdoll_ins != 0 && since.elapsed().as_secs_f32() > 0.1 => {
+                _ if ragdoll_allowed(chr) && since.elapsed().as_secs_f32() > 0.1 => {
                     // a few frames of guided flight gave his ragdoll's bodies the throw's speed:
                     // limp from here, the physics flies him (gravity, collision)
                     set_ragdoll(chr, RAGDOLL_FULL);
                     chr.modules.physics.gravity_disabled = false;
                     log(format!("swing: limp flight at {speed:.1} m/s"));
+                    st.throw_speed = speed;
                     st.falling = 0.0;
                     st.phase = Phase::Limp { boss, last: pos, peak: speed, since: Instant::now(), still: 0.0, frames: 0 };
                     None
