@@ -34,9 +34,11 @@ fn ragdoll_on() -> bool {
 
 /// Ragdoll amount 0..1 (0 = back to normal animation). The game's ragdoll states (ChrCtrl +0x128,
 /// synced into the ragdoll each frame by 0x1403cca60): 0 off, 2 full (death), 3 full, 4 blend.
-/// Which one we use: boss_ragdoll_state in er_mario.ini (default 3, the full non-death one).
+/// Which one we use: boss_ragdoll_state in er_mario.ini (default 2: the full ragdoll with map
+/// collision; the boss must not be hit while in it, it counts as dead then, and it is switched
+/// back to 0 after DOWN_FOR, which gets him back up).
 fn set_ragdoll(chr: &mut eldenring::cs::ChrIns, amount: f32) {
-    let state = crate::paths::config("boss_ragdoll_state").and_then(|v| v.parse().ok()).unwrap_or(3u8);
+    let state = crate::paths::config("boss_ragdoll_state").and_then(|v| v.parse().ok()).unwrap_or(2u8);
     let c = &mut chr.chr_ctrl;
     if amount <= 0.0 {
         c.chr_ragdoll_state = 0;
