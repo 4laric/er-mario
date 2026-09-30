@@ -234,9 +234,9 @@ pub fn probe_forward(player: &PlayerIns, feet: [f32; 3], forward: [f32; 3]) {
         match havok.phys_world.cast_ray(f, &start, delta, player) {
             Some(hit) => {
                 let d = ((hit.0 - start.0).powi(2) + (hit.2 - start.2).powi(2)).sqrt();
-                log(format!("  forward {f:#010x}: hit at {d:.2} m"));
+                crate::dlog(format!("  forward {f:#010x}: hit at {d:.2} m"));
             }
-            None => log(format!("  forward {f:#010x}: miss")),
+            None => crate::dlog(format!("  forward {f:#010x}: miss")),
         }
     }
 }

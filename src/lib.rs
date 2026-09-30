@@ -6,6 +6,7 @@
 
 mod assets;
 mod audio;
+mod carry;
 mod collision;
 mod coins;
 mod combat;
@@ -25,6 +26,7 @@ mod swing;
 mod stats;
 mod version;
 mod voice;
+mod watch;
 mod worker;
 
 use std::f32::consts::PI;
@@ -70,6 +72,13 @@ static MENU_OPEN: AtomicBool = AtomicBool::new(false);
 static PAD: Mutex<Option<(XINPUT_STATE, std::time::Instant)>> = Mutex::new(None);
 
 /// er_mario.log in the mod folder, started fresh every launch.
+/// A diagnostic line: only in the log with `debug = 1` (players' logs stay short).
+pub(crate) fn dlog(msg: impl AsRef<str>) {
+    if debug() {
+        log(msg);
+    }
+}
+
 pub(crate) fn log(msg: impl AsRef<str>) {
     static FRESH: std::sync::Once = std::sync::Once::new();
     let path = paths::file("er_mario.log");
@@ -132,8 +141,10 @@ fn xinput_hook(reg: *mut ilhook::x64::Registers, original: usize) -> usize {
         // buttons reach the game (menus need them; the Tarnished's actions are stripped in
         // input_task); the left stick is Mario's alone outside menus
         let g = &mut s.Gamepad;
-        g.sThumbLX = 0;
-        g.sThumbLY = 0;
+        if !ON_LADDER.load(Ordering::Relaxed) {
+            g.sThumbLX = 0;
+            g.sThumbLY = 0;
+        }
         // with the SM64 camera the right stick is Lakitu's C-buttons, not Elden Ring's camera
         if lakitu::ON.load(Ordering::Relaxed) {
             g.sThumbRX = 0;
@@ -218,10 +229,21 @@ fn hud_task() {
     let Ok(fe) = (unsafe { eldenring::cs::CSFeManImp::instance_mut() }) else { return };
     use eldenring::cs::CSFeManHudState as Hud;
     let mario = ENABLED.load(Ordering::Relaxed) && IN_WORLD.load(Ordering::Relaxed);
+    // HideAll: nothing of Elden Ring's HUD. It also hides the subtitle display, and a dialogue line
+    // can only be skipped while it's shown, so during a conversation (the game stops taking the
+    // character's actions, but no menu is up and the world runs) it's PopupMenu: subtitles on.
+    let talking = MENU_OPEN.load(Ordering::Relaxed) && !game_menu_open() && !WORLD_PAUSED.load(Ordering::Relaxed);
+    {
+        static WAS: AtomicBool = AtomicBool::new(false);
+        if WAS.swap(talking, Ordering::Relaxed) != talking {
+            log(format!("hud: conversation {}", if talking { "started: subtitles on" } else { "over" }));
+        }
+    }
+    let hidden = if talking { Hud::PopupMenu } else { Hud::HideAll };
     if mario {
         // Elden Ring's own bars are hidden (the enemies' health bars are the overlay's, hud.rs)
-        if matches!(fe.hud_state, Hud::Default) {
-            fe.hud_state = Hud::HideAll;
+        if matches!(fe.hud_state, Hud::Default) || (HIDDEN.load(Ordering::Relaxed) && fe.hud_state != hidden && !matches!(fe.hud_state, Hud::Default) && !gameover::showing() && !game_menu_open()) {
+            fe.hud_state = hidden;
             HIDDEN.store(true, Ordering::Relaxed);
         }
         if gameover::showing() {
@@ -229,7 +251,7 @@ fn hud_task() {
             fe.frontend_values.enable_equip_hud = false;
             HIDDEN.store(true, Ordering::Relaxed);
         }
-    } else if HIDDEN.swap(false, Ordering::Relaxed) && matches!(fe.hud_state, Hud::HideAll) {
+    } else if HIDDEN.swap(false, Ordering::Relaxed) && fe.hud_state == hidden {
         fe.hud_state = Hud::Default;
     }
 }
@@ -258,8 +280,11 @@ fn world_paused(player: &PlayerIns) -> bool {
     let a = &t.anim_queue[(t.read_idx % 10) as usize];
     let mut clock = CLOCK.lock().unwrap_or_else(|e| e.into_inner());
     let now = std::time::Instant::now();
+    // a hit that launches the Tarnished into the air stalls his animation until he lands, and
+    // he only lands when Mario moves him: in the air a stalled clock is not a pause
+    let airborne = !player.chr_ins.modules.physics.is_touching_ground;
     let still = match *clock {
-        Some((id, time, since)) if id == a.anim_id && time == a.play_time => since.elapsed().as_secs_f32() > 0.3,
+        Some((id, time, since)) if id == a.anim_id && time == a.play_time => since.elapsed().as_secs_f32() > 0.3 && !airborne,
         _ => {
             *clock = Some((a.anim_id, a.play_time, now));
             false
@@ -288,7 +313,7 @@ fn world_paused(player: &PlayerIns) -> bool {
                     let q = chr.modules.physics.position;
                     let d = ((q.0 - p.0).powi(2) + (q.2 - p.2).powi(2)).sqrt();
                     if chr.character_id == mine && d < 60.0 {
-                        log(format!(
+                        crate::dlog(format!(
                             "pause: player-model character {:?} at {d:.1} m, main {}",
                             chr.chr_type,
                             handle_key_of(&chr.field_ins_handle) == main
@@ -474,7 +499,7 @@ fn havok_surfaces(h: &mut havok_col::HavokCollision, origin: [f32; 3], mario: [f
                     break;
                 }
             }
-            log(format!("height check (real surface minus decoded, m): {}", rows.join(", ")));
+            crate::dlog(format!("height check (real surface minus decoded, m): {}", rows.join(", ")));
         }
     }
     let mut per_body: std::collections::BTreeMap<u32, (u32, u32, u32)> = Default::default();
@@ -483,7 +508,7 @@ fn havok_surfaces(h: &mut havok_col::HavokCollision, origin: [f32; 3], mario: [f
         .filter(|(t, layer, body)| {
             // layer 0x37 (detailed map collision the character walks on) and 0x1e (physics props) are
             // invisible to the game's rays, so the ray check can't confirm them: trust them
-            let ok = *layer == 0x37 || *layer == 0x1e || game_confirms(player, t);
+            let ok = *layer == 0x37 || *layer == 0x1e || h.is_boxed(*body) || game_confirms(player, t);
             let e = per_body.entry(*body).or_insert((*layer, 0, 0));
             e.1 += 1;
             e.2 += ok as u32;
@@ -498,9 +523,9 @@ fn havok_surfaces(h: &mut havok_col::HavokCollision, origin: [f32; 3], mario: [f
     }
     static ORACLE_LOGS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     if ORACLE_LOGS.fetch_add(1, Ordering::Relaxed) % 20 == 0 {
-        log(format!("game raycast check: kept {} of {before} triangles", tris.len()));
+        crate::dlog(format!("game raycast check: kept {} of {before} triangles ({} bodies skipped so far: not in the physics world)", tris.len(), h.not_in_world));
         let rows: Vec<String> = per_body.iter().map(|(b, (l, n, k))| format!("#{b}(L{l:x}) {k}/{n}")).collect();
-        log(format!("  per body confirmed/picked: {}", rows.join(", ")));
+        crate::dlog(format!("  per body confirmed/picked: {}", rows.join(", ")));
     }
     if tris.is_empty() {
         return None;
@@ -523,7 +548,7 @@ fn havok_surfaces(h: &mut havok_col::HavokCollision, origin: [f32; 3], mario: [f
                 }
             }
         }
-        log(format!("winding check: ground under Mario with Havok winding: {up} facing up, {down} facing down"));
+        crate::dlog(format!("winding check: ground under Mario with Havok winding: {up} facing up, {down} facing down"));
         if let Ok(h) = unsafe { eldenring::cs::CSHavokMan::instance() } {
             log(format!("CSHavokMan at {:#x}", h as *const _ as usize));
         }
@@ -544,8 +569,12 @@ fn havok_surfaces(h: &mut havok_col::HavokCollision, origin: [f32; 3], mario: [f
         // Havok collision is two-sided, SM64 surfaces are not: face each triangle the way Mario
         // meets it. Flat below head height = floor (up), flat above = ceiling (down), else wall
         // facing Mario.
+        // (a long ramp's centre can be far up the slope: judge it by its height where Mario is)
         let want = if n.y.abs() > 0.2 {
-            if centroid.y < m.y + 120.0 { glam::Vec3::Y } else { -glam::Vec3::Y }
+            let lo = a.y.min(b.y).min(c.y);
+            let hi = a.y.max(b.y).max(c.y);
+            let here = (a.y - (n.x * (m.x - a.x) + n.z * (m.z - a.z)) / n.y).clamp(lo, hi);
+            if here < m.y + 120.0 { glam::Vec3::Y } else { -glam::Vec3::Y }
         } else {
             let to_mario = m - centroid;
             glam::Vec3::new(to_mario.x, 0.0, to_mario.z)
@@ -658,10 +687,33 @@ fn pose_task_late() {
     // launch without the built files, no ROM, or the no-ground safety)
     let coming = ENABLED.load(Ordering::Relaxed)
         || (assets::ready() && (!AUTO_STARTED.load(Ordering::Relaxed) || SM64_READY.load(Ordering::Relaxed)));
-    if WANTED.load(Ordering::Relaxed) && coming && !worker::hung() && engine_mario::POSE.lock().unwrap_or_else(|e| e.into_inner()).is_none() {
+    // (and never for long: after 5 s without Mario the Tarnished shows again)
+    static WAITING_SINCE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+    let no_pose = engine_mario::POSE.lock().unwrap_or_else(|e| e.into_inner()).is_none();
+    let too_long = {
+        let mut w = WAITING_SINCE.lock().unwrap_or_else(|e| e.into_inner());
+        if !no_pose {
+            *w = None;
+        }
+        w.get_or_insert_with(std::time::Instant::now).elapsed().as_secs_f32() > 5.0
+    };
+    if WANTED.load(Ordering::Relaxed) && coming && !worker::hung() && no_pose && !too_long {
         if let Some(p) = (unsafe { WorldChrMan::instance_mut() }).ok().and_then(|w| w.main_player.as_mut()) {
             p.chr_ins.opacity_keyframes_multiplier = 0.0;
             p.chr_ins.opacity_keyframes_multiplier_previous = 0.0;
+        }
+    }
+    // in a cutscene the player isn't rendered at all (opacity is the cutscene's): written in every
+    // task group up to Draw_Pre, so the cutscene can't turn it back on in between; switched back
+    // on once when it ends
+    {
+        static WAS_HIDDEN: AtomicBool = AtomicBool::new(false);
+        let hide = CUTSCENE_HIDE.load(Ordering::Relaxed) && ENABLED.load(Ordering::Relaxed);
+        let was = WAS_HIDDEN.swap(hide, Ordering::Relaxed);
+        if hide || was {
+            if let Some(p) = (unsafe { WorldChrMan::instance_mut() }).ok().and_then(|w| w.main_player.as_mut()) {
+                p.chr_ins.chr_flags1c5.set_enable_render(!hide);
+            }
         }
     }
     if !ENABLED.load(Ordering::Relaxed) {
@@ -671,8 +723,26 @@ fn pose_task_late() {
     engine_mario::apply(&player.chr_ins as *const _ as usize, "LocationUpdate_PrePhysics");
 }
 
+/// A cutscene is playing: the player isn't rendered (pose_task_late).
+static CUTSCENE_HIDE: AtomicBool = AtomicBool::new(false);
+
+
 /// Set by input_task when the player pressed interact; frame() then watches for an event animation.
 static INTERACT_PRESSED: AtomicBool = AtomicBool::new(false);
+/// Elden Ring's ladder animations (getting on, climbing, sliding, getting off).
+fn ladder_anim(anim: i32) -> bool {
+    (28000..29000).contains(&anim) || (51100..51200).contains(&anim)
+}
+
+/// A game-driven animation Mario follows: events (6xxxx: fog walls, doors, levers) and ladders.
+fn game_driven(anim: i32) -> bool {
+    (60000..70000).contains(&anim) || ladder_anim(anim)
+}
+
+/// SM64 action for climbing an Elden Ring ladder (libsm64 patch: the pole climb, moved by the game).
+const ACT_ER_LADDER: u32 = 0x0000035F;
+const ACT_FREEFALL: u32 = 0x0100088C;
+
 /// Mario is following the Tarnished through a game-driven animation (fog wall, door, ladder...).
 /// The Tarnished's last animation outside the event range (what he returns to after one).
 static LAST_FREE_ANIM: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
@@ -689,6 +759,8 @@ static PENDING_RESTORE: Mutex<Option<(std::time::Instant, equip::Loadout)>> = Mu
 static CREATE_RETRY: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 static RETURN_HOME: AtomicBool = AtomicBool::new(false);
 static FOLLOWING: AtomicBool = AtomicBool::new(false);
+/// The Tarnished is on a ladder: the left stick (and WASD) climb it, so they go to the game.
+static ON_LADDER: AtomicBool = AtomicBool::new(false);
 
 /// Runs right after the game turned the pad into character actions (ChrIns_PreBehaviorSafe):
 /// detects menus (buttons pressed but nothing reaches the character) and strips every action but
@@ -747,6 +819,22 @@ fn input_task() {
         MENU_OPEN.store(!routed, Ordering::Relaxed);
     }
     const ACTION: u64 = 1 << 4; // interact (doors, chests, graces, messages...)
+    // research (debug): which action bits a press makes, to find what NPC dialogue listens to
+    if debug() {
+        static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let presses = *bits(&mut req.new_action_presses) | *bits(&mut req.action_requests) | *bits(&mut req.queued_action_inputs);
+        if presses != 0 && LAST.swap(presses, Ordering::Relaxed) != presses {
+            log(format!(
+                "input: actions new {:#x} requests {:#x} queued {:#x} (possible {:#x})",
+                *bits(&mut req.new_action_presses),
+                *bits(&mut req.action_requests),
+                *bits(&mut req.queued_action_inputs),
+                *bits(&mut req.possible_action_inputs)
+            ));
+        } else if presses == 0 {
+            LAST.store(0, Ordering::Relaxed);
+        }
+    }
     if *bits(&mut req.new_action_presses) & ACTION != 0 {
         INTERACT_PRESSED.store(true, Ordering::Relaxed);
     }
@@ -848,7 +936,7 @@ fn frame(data: &FD4TaskData) {
     let pad = if MENU_OPEN.load(Ordering::Relaxed) || FOLLOWING.load(Ordering::Relaxed) { None } else { pad };
     // Mario's keys (WASD etc.) only reach the game in menus or with Mario off
     kbd::CAPTURE.store(
-        ENABLED.load(Ordering::Relaxed) && IN_WORLD.load(Ordering::Relaxed) && !MENU_OPEN.load(Ordering::Relaxed),
+        ENABLED.load(Ordering::Relaxed) && IN_WORLD.load(Ordering::Relaxed) && !MENU_OPEN.load(Ordering::Relaxed) && !ON_LADDER.load(Ordering::Relaxed),
         Ordering::Relaxed,
     );
     let btn = pad.map(|p| p.Gamepad.wButtons).unwrap_or_default();
@@ -941,7 +1029,7 @@ fn frame(data: &FD4TaskData) {
             log(format!("resting at a grace (anim {a}): health refilled"));
         }
         if last != a && debug() {
-            log(format!("tarnished anim -> {a}"));
+            crate::dlog(format!("tarnished anim -> {a}"));
         }
     }
     static FALL_OVERRIDDEN: AtomicBool = AtomicBool::new(false);
@@ -1022,6 +1110,20 @@ fn frame(data: &FD4TaskData) {
     if guard.is_none() && CREATE_RETRY.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|t| t.elapsed().as_secs_f32() < 1.0) {
         return;
     }
+    // Mario only once the game has solid ground right under the player: after a respawn the
+    // floor there may still be loading while something lower (a cave, the terrain under a
+    // building) already is, and Mario would be put on that, under the floor
+    if guard.is_none() {
+        let p = physics.position;
+        let ground = unsafe { eldenring::cs::CSHavokMan::instance() }.ok().and_then(|h| {
+            h.phys_world.cast_ray(RAY_FILTER, &HavokPosition(p.0, p.1 + 1.0, p.2, 0.0), eldenring::position::PositionDelta(0.0, -4.0, 0.0), player_ref)
+        });
+        if ground.is_none() {
+            *CREATE_RETRY.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
+            log("waiting for the ground under the player before creating Mario");
+            return;
+        }
+    }
     let m = guard.get_or_insert_with(|| {
         let p = physics.position;
         let feet = [p.0, p.1, p.2];
@@ -1045,9 +1147,24 @@ fn frame(data: &FD4TaskData) {
                 collision::build(&caster, [0.0, 0.0, 0.0])
             }
         };
-        if !surfaces.is_empty() {
-            load_surfaces(&surfaces);
+        // plus a floor exactly where the game has his feet (and for a moment after): whatever he
+        // stands on, SM64 can create Mario there, at the right height (a floor it doesn't know,
+        // like some platforms, made creation fail and left the player invisible)
+        // (the game holds a respawning player about a metre under the floor for a moment: the
+        // top of the ground within 2 m above his feet is where Mario goes)
+        let lift = unsafe { eldenring::cs::CSHavokMan::instance() }
+            .ok()
+            .and_then(|h| h.phys_world.cast_ray(RAY_FILTER, &HavokPosition(p.0, p.1 + 2.0, p.2, 0.0), eldenring::position::PositionDelta(0.0, -4.0, 0.0), player_ref))
+            .map(|g| (g.1 - p.1).clamp(0.0, 2.0))
+            .unwrap_or(0.0);
+        if lift > 0.05 {
+            log(format!("spawn: the ground is {lift:.2} m above the player's feet, Mario goes on top"));
         }
+        let start_y = lift / SCALE;
+        let mut surfaces = surfaces;
+        surfaces.extend(flat_floor([0.0, start_y, 0.0]));
+        load_surfaces(&surfaces);
+        *FOLLOW_ENDED.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
         {
             let mut saved = SAVED_LOADOUT.lock().unwrap_or_else(|e| e.into_inner());
             if saved.is_none() {
@@ -1056,8 +1173,14 @@ fn frame(data: &FD4TaskData) {
                 equip::enforce(player_ref);
             }
         }
-        let id = worker::call("create", |_| unsafe { sm64::sm64_mario_create(0.0, 0.0, 0.0) }).unwrap_or(-1);
+        let id = worker::call("create", move |_| unsafe { sm64::sm64_mario_create(0.0, start_y + 1.0, 0.0) }).unwrap_or(-1);
         log(format!("mario created id={id} at {:?}", (p.0, p.1, p.2)));
+        // which collision is under his feet (a layer SM64 doesn't get would drop him through)
+        for line in havok.probe(glam::Vec3::new(p.0, p.1, p.2)) {
+            if line.contains("surface") {
+                log(format!("spawn floor:{line}"));
+            }
+        }
         {
             // which armour pieces is the player wearing? (for swapping in the Mario model)
             use eldenring::cs::{EquipParamProtector, SoloParamRepository};
@@ -1220,8 +1343,20 @@ fn frame(data: &FD4TaskData) {
     let wedges = if m.dead { 0 } else { (m.state.health.max(0) >> 8) as u8 };
     // (no HUD on the loading screen: the Tarnished has no animation yet while the world loads)
     let loading = current_anim(&player_ref.chr_ins) == -1;
+    watch::poll();
     let paused = WORLD_PAUSED.load(Ordering::Relaxed);
-    hud::set(wedges.min(8), m.dead || loading || paused || MENU_OPEN.load(Ordering::Relaxed), true);
+    let hide_why = if m.dead {
+        Some("dead")
+    } else if loading {
+        Some("loading")
+    } else if paused {
+        Some("paused")
+    } else if MENU_OPEN.load(Ordering::Relaxed) {
+        Some("menu")
+    } else {
+        None
+    };
+    hud::set(wedges.min(8), hide_why, true);
     // the tail swing: watch the bosses' stance, carry / throw / fly the grabbed one
     swing::watch_stances(&combat::boss_handles());
     {
@@ -1237,6 +1372,32 @@ fn frame(data: &FD4TaskData) {
         if let Some((boss, pct)) = impact {
             combat::impact(&mut m.combat, &boss, pct, m.ticks);
             worker::call("impact sound", |_| unsafe { sm64::sm64_play_sound_global(swing::SOUND_IMPACT) });
+        }
+        // an enemy picked up like a Bob-omb: carried between Mario's hands, thrown with B
+        let id = m.id;
+        let hands = worker::call("held", move |_| {
+            let mut p = [0f32; 3];
+            (unsafe { sm64::sm64_er_held(id, p.as_mut_ptr()) } != 0).then_some(p)
+        })
+        .flatten()
+        // (libsm64 doesn't fill SM64's held-object point, that comes from its camera renderer:
+        // in front of Mario at chest height, like SM64 holds a Bob-omb)
+        .map(|_| {
+            let fa = m.state.face_angle;
+            glam::Vec3::new(me.0, me.1, me.2) + glam::Vec3::new(-fa.sin(), 0.0, fa.cos()) * 0.45 + glam::Vec3::Y * 0.75
+        });
+        let impact = carry::update(data.delta_time.time, hands, m.state.face_angle, m.state.action, |from, to| {
+            let h = havok?;
+            let d = to - from;
+            h.phys_world
+                .cast_ray(RAY_FILTER, &HavokPosition(from.x, from.y, from.z, 0.0), eldenring::position::PositionDelta(d.x, d.y, d.z), player_ref)
+                .map(|h| glam::Vec3::new(h.0, h.1, h.2))
+        });
+        for (mob, pct) in &impact {
+            combat::impact(&mut m.combat, mob, *pct, m.ticks);
+        }
+        if !impact.is_empty() {
+            worker::call("impact sound", |_| unsafe { sm64::sm64_play_sound_global(carry::SOUND_IMPACT) });
         }
     }
     let st = stats::get();
@@ -1312,6 +1473,7 @@ fn frame(data: &FD4TaskData) {
         stats::update(|s| s.deaths += 1);
         coins::clear();
         swing::reset();
+        carry::reset();
     } else if m.dead && hp > 0 {
         log("respawned: recreating Mario");
         m.moving.clear(&mut m.havok);
@@ -1486,7 +1648,8 @@ fn frame(data: &FD4TaskData) {
         // SM64's health is Mario's: Elden Ring hits cost wedges, and the Tarnished's HP is kept full
         let hurt = {
             let data = &player_ref.chr_ins.modules.data;
-            let hurt = m.combat.took_damage(data.hp, data.max_hp).filter(|_| !m.dead);
+            // holding a boss by the tail: his swings don't reach Mario (they broke the grab)
+            let hurt = m.combat.took_damage(data.hp, data.max_hp).filter(|_| !m.dead && !swing::holding() && !carry::holding());
             if !m.dead && data.hp > 0 {
                 set_player_hp(data.max_hp);
             }
@@ -1524,6 +1687,8 @@ fn frame(data: &FD4TaskData) {
         let health_before = m.state.health;
         let head = lakitu::head();
         let grab = swing::take_start();
+        let pick_up = carry::take_start();
+        let put_down = carry::take_drop();
         let stagger_cue = swing::take_cue();
         let action_before = m.state.action;
         let alive = !m.dead;
@@ -1546,7 +1711,8 @@ fn frame(data: &FD4TaskData) {
             && !ANIM_SIDESTEP.contains(&m.state.anim_id);
         let hovering = m.state.action & ACT_FLAG_AIR != 0;
         let still = glam::Vec3::from(m.state.position).distance(glam::Vec3::from(m.prev_pos)) < 1.0;
-        if (pushing || hovering) && still && !m.dead && !FOLLOWING.load(Ordering::Relaxed) {
+        // standing still is normal with a boss by the tail
+        if (pushing || hovering) && still && !m.dead && !FOLLOWING.load(Ordering::Relaxed) && !swing::holding() {
             m.stuck_ticks += 1;
         } else {
             m.stuck_ticks = 0;
@@ -1593,6 +1759,13 @@ fn frame(data: &FD4TaskData) {
             if grab {
                 unsafe { sm64::sm64_set_mario_action(id, swing::ACT_PICKING_UP_BOWSER) };
                 unsafe { sm64::sm64_play_sound_global(swing::SOUND_GRAB) };
+            }
+            // an enemy picked up like a Bob-omb (SM64's pickup and carrying, carry.rs)
+            if pick_up {
+                unsafe { sm64::sm64_er_pick_up(id) };
+            }
+            if put_down {
+                unsafe { sm64::sm64_er_drop(id) };
             }
             if stagger_cue {
                 unsafe { sm64::sm64_play_sound_global(swing::SOUND_STAGGER) };
@@ -1714,7 +1887,20 @@ fn frame(data: &FD4TaskData) {
     }
 
     // debug Mario (F11): hide the Tarnished and draw Mario with the debug renderer instead
-    set_opacity(1.0);
+    // In a cutscene the game poses the character itself after Mario's pose is written (Mario
+    // crumples and the Tarnished's face shows): the player is hidden then. A cutscene = the world
+    // paused with no menu or prompt up, by the game's own signal (our "menu" guess from ignored
+    // button presses fires in cutscenes too, they ignore input the same way).
+    // (a loading screen pauses too: anim -1, not a cutscene)
+    let cutscene = WORLD_PAUSED.load(Ordering::Relaxed) && !m.dead && !game_menu_open() && current_anim(&player_ref.chr_ins) != -1;
+    {
+        static IN_CUTSCENE: AtomicBool = AtomicBool::new(false);
+        if IN_CUTSCENE.swap(cutscene, Ordering::Relaxed) != cutscene {
+            log(format!("cutscene: {}", if cutscene { "player hidden" } else { "over, player shown" }));
+        }
+    }
+    CUTSCENE_HIDE.store(cutscene, Ordering::Relaxed);
+    set_opacity(if cutscene { 0.0 } else { 1.0 });
 
     // event animations (fog walls, doors, ladders...): after an interact, if the Tarnished starts a
     // new animation, the game drives him and Mario follows until he's back to what he was doing
@@ -1728,10 +1914,10 @@ fn frame(data: &FD4TaskData) {
             *armed = Some((std::time::Instant::now(), cur));
         }
         // any event animation (6xxxx: fog walls, doors, levers...) is game-driven
-        if follow.is_none() && armed.is_none() && (60000..70000).contains(&cur) {
+        if follow.is_none() && armed.is_none() && game_driven(cur) {
             *armed = Some((std::time::Instant::now(), LAST_FREE_ANIM.load(Ordering::Relaxed)));
         }
-        if !(60000..70000).contains(&cur) && follow.is_none() {
+        if !game_driven(cur) && follow.is_none() {
             LAST_FREE_ANIM.store(cur, Ordering::Relaxed);
         }
         if let Some((t, before)) = *armed {
@@ -1749,11 +1935,31 @@ fn frame(data: &FD4TaskData) {
         if let Some((t, before, last)) = *follow {
             if cur != last {
                 log(format!("follow: anim {last} -> {cur}"));
+                if ladder_anim(cur) {
+                    let o = physics.orientation;
+                    let f = glam::Quat::from_xyzw(o.0, o.1, o.2, o.3).mul_vec3(glam::vec3(0.0, 0.0, -1.0));
+                    log(format!(
+                        "ladder: Tarnished at {:.2?} facing {f:.2?}, Mario face angle {:.2}",
+                        (physics.position.0, physics.position.1, physics.position.2),
+                        m.state.face_angle
+                    ));
+                }
                 *follow = Some((t, before, cur));
             }
             let _ = before;
-            if !(60000..70000).contains(&cur) || t.elapsed().as_secs_f32() > 15.0 {
+            // (a long ladder takes a while)
+            let limit = if ladder_anim(last) { 60.0 } else { 15.0 };
+            if !game_driven(cur) || t.elapsed().as_secs_f32() > limit {
                 log("follow: done");
+                // off the ladder: SM64 takes over, dropping him onto the floor he's on
+                if m.state.action == ACT_ER_LADDER {
+                    let id = m.id;
+                    worker::call("ladder off", move |_| unsafe {
+                        sm64::sm64_er_set_ladder(0.0);
+                        sm64::sm64_set_mario_action(id, ACT_FREEFALL);
+                    });
+                    m.state.action = ACT_FREEFALL;
+                }
                 let trace = std::mem::take(&mut *FOLLOW_TRACE.lock().unwrap_or_else(|e| e.into_inner()));
                 log(format!("follow: SM64 action/anim per tick: {}", trace.join(" ")));
                 *follow = None;
@@ -1764,6 +1970,7 @@ fn frame(data: &FD4TaskData) {
             }
         }
         FOLLOWING.store(follow.is_some(), Ordering::Relaxed);
+        ON_LADDER.store(follow.is_some() && ladder_anim(cur), Ordering::Relaxed);
         if follow.is_some() {
             let p = physics.position;
             let sm = collision::er_to_sm(m.origin, &p);
@@ -1775,10 +1982,11 @@ fn frame(data: &FD4TaskData) {
                 acc: f32,
                 speed: f32,
                 still: f32,
+                climb: f32,
             }
             static WALK: Mutex<Option<Walk>> = Mutex::new(None);
             let mut walk = WALK.lock().unwrap_or_else(|e| e.into_inner());
-            let w = walk.get_or_insert(Walk { pos: [p.0, p.1, p.2], acc: 0.0, speed: 0.0, still: 1.0 });
+            let w = walk.get_or_insert(Walk { pos: [p.0, p.1, p.2], acc: 0.0, speed: 0.0, still: 1.0, climb: 0.0 });
             w.acc += data.delta_time.time.max(1e-3);
             let tick = w.acc >= 1.0 / 30.0;
             if tick {
@@ -1789,10 +1997,15 @@ fn frame(data: &FD4TaskData) {
                     w.speed += (v - w.speed) * 0.4;
                 }
                 w.still = if w.speed < 0.2 { w.still + w.acc } else { 0.0 };
+                let vy = (p.1 - w.pos[1]).abs() / w.acc;
+                if vy < 15.0 {
+                    w.climb += (vy - w.climb) * 0.4;
+                }
                 w.pos = [p.0, p.1, p.2];
                 w.acc = 0.0;
             }
-            let (speed, walking) = (w.speed, w.still < 0.3);
+            let (speed, walking, climb) = (w.speed, w.still < 0.3, w.climb);
+            let on_ladder = ladder_anim(current_anim(&player_ref.chr_ins));
             // how far between two SM64 ticks this frame is (the pose is blended, like in play)
             let alpha = (w.acc * 30.0).clamp(0.0, 1.0);
             drop(walk);
@@ -1803,7 +2016,7 @@ fn frame(data: &FD4TaskData) {
             if tick {
                 let mut inputs = sm64::SM64MarioInputs::default();
                 // walking pace (SM64's full stick runs at ~9 m/s); teleport-sized jumps don't count
-                if walking && dir != glam::Vec3::ZERO {
+                if walking && dir != glam::Vec3::ZERO && !on_ladder {
                     inputs.cam_look_x = -dir.x;
                     inputs.cam_look_z = dir.z;
                     // a clear walking pace: at the Tarnished's slow speed SM64 would sit on the edge
@@ -1830,6 +2043,7 @@ fn frame(data: &FD4TaskData) {
                     f
                 });
                 drop(loaded_at);
+                let ladder_was = m.state.action == ACT_ER_LADDER;
                 let parts = worker::call("follow tick", move |ctx| {
                     if let Some(floors) = &floors {
                         unsafe { sm64::sm64_static_surfaces_load(floors.as_ptr(), floors.len() as u32) };
@@ -1840,6 +2054,16 @@ fn frame(data: &FD4TaskData) {
                         unsafe { sm64::sm64_set_mario_faceangle(id, face) };
                     }
                     unsafe { sm64::sm64_set_mario_position(id, sm[0], sm[1], sm[2]) };
+                    // on a ladder: SM64's pole climb, at a pace from how fast the game moves him
+                    // (~1.5 m/s climbing = SM64's quick climb)
+                    if on_ladder {
+                        unsafe {
+                            sm64::sm64_er_set_ladder(if climb > 0.2 { (climb * 1.2).clamp(0.5, 2.5) } else { 0.0 });
+                            if !ladder_was {
+                                sm64::sm64_set_mario_action(id, ACT_ER_LADDER);
+                            }
+                        }
+                    }
                     let mut state = sm64::SM64MarioState::default();
                     {
                         let mut buffers = ctx.geo.buffers();
@@ -1882,6 +2106,30 @@ fn frame(data: &FD4TaskData) {
         }
     }
 
+    // F2 (debug): every Site of Grace unlocked (their "lit" event flags from BonfireWarpParam),
+    // for testing around the world. Offline Mario save only.
+    {
+        static F2_WAS: AtomicBool = AtomicBool::new(false);
+        let f2 = debug_key(0x71);
+        if f2 && !F2_WAS.swap(true, Ordering::Relaxed) {
+            use eldenring::cs::{BonfireWarpParam, CSEventFlagMan, SoloParamRepository};
+            if let (Ok(repo), Ok(flags)) = (unsafe { SoloParamRepository::instance() }, unsafe { CSEventFlagMan::instance_mut() }) {
+                let mut n = 0;
+                for i in 0..4000 {
+                    let Some(row) = repo.get_row_by_index::<BonfireWarpParam>(i) else { break };
+                    let flag = row.eventflag_id();
+                    if flag != 0 {
+                        flags.virtual_memory_flag.set_flag(flag, true);
+                        n += 1;
+                    }
+                }
+                log(format!("graces: {n} unlocked"));
+            }
+        } else if !f2 {
+            F2_WAS.store(false, Ordering::Relaxed);
+        }
+    }
+
     // F5: probe the ground 1.5 m in front of Mario (which body/layer is there, and the game's ray)
     {
         static F5_WAS: AtomicBool = AtomicBool::new(false);
@@ -1908,6 +2156,11 @@ fn frame(data: &FD4TaskData) {
             }
             for line in m.havok.probe(p) {
                 log(line);
+            }
+            for layer in [0x3a, 0x39] {
+                for line in havok_col::dump_layer_near(p, 6.0, layer).into_iter().take(12) {
+                    log(line);
+                }
             }
             // SM64's own view: loaded wall-ish triangles near Mario (within 120 units, Mario's height band)
             let [mx, my, mz] = m.state.position;

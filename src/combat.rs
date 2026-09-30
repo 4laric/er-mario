@@ -116,7 +116,7 @@ const BOSS_FACTOR: f32 = 0.05;
 
 /// Team types on the player's side (the player, co-op phantoms, summons and spirit ashes): Mario
 /// doesn't hurt those. Everyone else can be hit, friendly NPCs included, like with a weapon.
-fn own_side(team: u8) -> bool {
+pub fn own_side(team: u8) -> bool {
     matches!(team, 1 | 2 | 5 | 12)
 }
 
@@ -305,6 +305,31 @@ pub fn nearby(center: &HavokPosition, range: f32, origin: [f32; 3]) -> Vec<Targe
     out
 }
 
+/// Whether Mario can pick this character up (a regular enemy: not a boss, not on his side).
+fn liftable(handle: &FieldInsHandle) -> bool {
+    if is_boss(handle) {
+        return false;
+    }
+    let Ok(wcm) = (unsafe { WorldChrMan::instance() }) else { return false };
+    wcm.chr_ins_by_handle(handle).is_some_and(|c| !own_side(c.team_type) && !boss_class(handle, c))
+}
+
+/// Characters that have shown a boss bar at some point (the bar only appears once a fight starts).
+static SEEN_BOSSES: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
+/// Big or tough characters count as bosses for damage even before (or without) a boss bar.
+const BOSS_RADIUS: f32 = 1.5;
+const BOSS_MAX_HP: i32 = 2500;
+
+/// Whether a character takes boss damage: a boss bar now or before, the strong-enemy team, or
+/// big / tough enough (a field boss hit before his bar showed took a regular enemy's 50%).
+fn boss_class(handle: &FieldInsHandle, chr: &ChrIns) -> bool {
+    is_boss(handle)
+        || chr.team_type == TEAM_STRONG_ENEMY
+        || SEEN_BOSSES.lock().unwrap_or_else(|e| e.into_inner()).contains(&handle_key(handle))
+        || chr.modules.physics.hit_radius >= BOSS_RADIUS
+        || chr.modules.data.max_hp >= BOSS_MAX_HP
+}
+
 /// Whether a character is a boss right now (its health bar is on screen).
 fn is_boss(handle: &FieldInsHandle) -> bool {
     let key = handle_key(handle);
@@ -363,15 +388,15 @@ pub fn tags() -> Vec<crate::hud::Tag> {
         .collect()
 }
 
-/// A thrown boss hit something: `pct` of his max HP (the last point is left for the game, like
-/// Mario's hits; the fallback finishes him if nothing else does).
+/// A thrown character hit something: `pct` of its max HP, lethal if that's all it had left.
 pub fn impact(combat: &mut Combat, handle: &FieldInsHandle, pct: f32, tick: u32) {
     let Ok(wcm) = (unsafe { WorldChrMan::instance_mut() }) else { return };
     let Some(chr) = wcm.chr_ins_by_handle_mut(handle) else { return };
     let data = &mut chr.modules.data;
     let (hp, max) = (data.hp, data.max_hp.max(1));
     let dmg = ((max as f32 * pct / 100.0).ceil() as i32).max(1);
-    data.hp = (hp - dmg).max(1);
+    // (throws kill right there when the impact takes the rest of his HP)
+    data.hp = (hp - dmg).max(0);
     show_damage(handle, hp, hp - data.hp, true);
     if data.hp == 1 {
         combat.finishing.entry(handle_key(handle)).or_insert((*handle, tick));
@@ -381,9 +406,17 @@ pub fn impact(combat: &mut Combat, handle: &FieldInsHandle, pct: f32, tick: u32)
 
 /// The bosses on screen (their boss bars).
 pub fn boss_handles() -> Vec<FieldInsHandle> {
-    unsafe { eldenring::cs::CSFeManImp::instance() }
+    let handles: Vec<FieldInsHandle> = unsafe { eldenring::cs::CSFeManImp::instance() }
         .map(|fe| fe.boss_health_displays.iter().filter(|e| !e.field_ins_handle.is_empty()).map(|e| e.field_ins_handle).collect())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let mut seen = SEEN_BOSSES.lock().unwrap_or_else(|e| e.into_inner());
+    for h in &handles {
+        let k = handle_key(h);
+        if !seen.contains(&k) {
+            seen.push(k);
+        }
+    }
+    handles
 }
 
 fn boss_keys() -> Vec<u64> {
@@ -442,7 +475,7 @@ fn take_share(handle: &FieldInsHandle, attack: Attack) -> bool {
         log(format!("combat: team {team} is on the player's side, no damage"));
         return false;
     }
-    let boss = bar || team == TEAM_STRONG_ENEMY;
+    let boss = bar || boss_class(handle, chr);
     let (default, key) = attack.percent();
     let mut pct = config_f32(key, default);
     if boss {
@@ -512,7 +545,8 @@ impl Combat {
         // the final blow is the bullet's; if it can't land (some small or odd characters), finish
         // them after 0.5 s
         self.finishing.retain(|_, (handle, t)| {
-            if tick.wrapping_sub(*t) < 15 {
+            // (a boss Mario has grabbed or thrown: the throw's impact deals the final blow)
+            if tick.wrapping_sub(*t) < 15 || crate::swing::busy_with(handle) {
                 return true;
             }
             if let Some(chr) = unsafe { WorldChrMan::instance_mut() }.ok().and_then(|w| w.chr_ins_by_handle_mut(handle)) {
@@ -535,8 +569,16 @@ impl Combat {
             if let Some(handle) = &target.handle {
                 // a thrown boss in the air or lying limp: no hit at all (not even the game's own,
                 // which could finish a ragdolled character)
-                if crate::swing::is_down(handle) {
+                if crate::swing::is_down(handle) || crate::carry::is_carried(handle) {
                     continue;
+                }
+                // a regular enemy punched from behind: Mario picks it up like a Bob-omb (carry.rs)
+                if matches!(attack, Attack::Punch) && liftable(handle) {
+                    let me = player.modules.physics.position;
+                    if crate::carry::try_pick_up(handle, glam::Vec3::new(me.0, me.1, me.2), target.radius / 100.0, target.height / 100.0) {
+                        self.victims.insert(target.key, (*handle, tick));
+                        continue;
+                    }
                 }
                 // a boss with a broken stance: this hit grabs him by the tail (swing.rs)
                 if crate::swing::try_grab(handle, target.radius / 100.0) {

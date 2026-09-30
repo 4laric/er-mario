@@ -88,6 +88,11 @@ pub struct HavokCollision {
     bodies: usize,
     body_count: usize,
     logged_layers: bool,
+    /// shapes collided as a box (custom-piece meshes): the game's rays pass their gaps, so they
+    /// can't confirm them
+    pub boxed: std::collections::HashSet<usize>,
+    /// bodies skipped for not being in the physics world (diagnostics)
+    pub not_in_world: u32,
     queries: u32,
 }
 
@@ -144,6 +149,35 @@ fn decode_convex(shape: usize) -> Option<Vec<Tri>> {
         }
     }
     Some(tris)
+}
+
+/// A compressed mesh made only of custom (convex piece) primitives, like the portcullis gates:
+/// its pieces aren't plain triangles, so it becomes the box of its domain, if that box is thin
+/// (gates, grilles, fences). Shape-local triangles; None for anything else.
+fn custom_pieces_box(md: usize) -> Option<Vec<Tri>> {
+    if !readable(md, 0xb0) {
+        return None;
+    }
+    let prims = read_u64(md + 0x70)? as usize;
+    let n = u32_at(md + 0x78) as usize;
+    if n == 0 || n > 100_000 || !readable(prims, n * 4) {
+        return None;
+    }
+    // (a primitive whose first two indices match is a custom one)
+    let all_custom = (0..n).all(|k| unsafe { *((prims + k * 4) as *const u8) == *((prims + k * 4 + 1) as *const u8) });
+    if !all_custom {
+        return None;
+    }
+    let lo = vec3_at(md + 0x30);
+    let hi = vec3_at(md + 0x40);
+    let size = hi - lo;
+    if !(size.min_element() > 0.0 && size.min_element() < 1.0 && size.max_element() < 60.0) {
+        return None;
+    }
+    let c = |i: u32| Vec3::new(if i & 1 == 0 { lo.x } else { hi.x }, if i & 2 == 0 { lo.y } else { hi.y }, if i & 4 == 0 { lo.z } else { hi.z });
+    // the 6 faces as 12 triangles (facing is decided later, per triangle)
+    let faces = [[0, 1, 3, 2], [4, 5, 7, 6], [0, 1, 5, 4], [2, 3, 7, 6], [0, 2, 6, 4], [1, 3, 7, 5]];
+    Some(faces.iter().flat_map(|f| [[c(f[0]), c(f[1]), c(f[2])], [c(f[0]), c(f[2]), c(f[3])]]).collect())
 }
 
 /// Decodes a hknpCompressedMeshShapeData into shape-local triangles. None if the layout looks wrong.
@@ -275,6 +309,35 @@ fn bodies_near(center: Vec3, range: f32) -> Vec<String> {
     out
 }
 
+/// Debug: the raw words (+0x40..+0xb0) of every body on `layer` (low byte) whose AABB is within
+/// `range` m of `center`, to compare a live body with one the game switched off.
+pub fn dump_layer_near(center: Vec3, range: f32, layer: u32) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(havok) = unsafe { CSHavokMan::instance() }.ok() else { return out };
+    let base = havok as *const CSHavokMan as usize;
+    let Some(world) = read_u64(base + 0x98).and_then(|pw| read_u64(pw as usize + 0x8)) else { return out };
+    let world = world as usize;
+    let Some(bodies) = read_u64(world + 0x28) else { return out };
+    let bodies = bodies as usize;
+    let count = (u32_at(world + 0x30) as usize).min(262_144);
+    if !readable(bodies, count * 0xb0) {
+        return out;
+    }
+    for i in 0..count {
+        let body = bodies + i * 0xb0;
+        if u32_at(body + 0x6c) & 0xff != layer || unsafe { *((body + 0x60) as *const usize) } == 0 {
+            continue;
+        }
+        let p = vec3_at(body + 0x30);
+        if (p - center).length() > range {
+            continue;
+        }
+        let words: Vec<String> = (0x40..0xb0).step_by(4).map(|o| format!("{:08x}", u32_at(body + o))).collect();
+        out.push(format!("  raw body #{i} L{layer:x} at {p:.2?}: {}", words.join(" ")));
+    }
+    out
+}
+
 /// Breakable things near `center`: (body index, origin, layer). Physics props (layer 0x1e: loose
 /// barrels, pots) have their origin at the centre of mass; map assets (0x3a: crates and barrels
 /// in dungeons, also lifts and gates, which just shrug a hit off) at their base.
@@ -293,13 +356,24 @@ pub fn props_near(center: Vec3, range: f32) -> Vec<(u32, Vec3, u32)> {
     for i in 0..count {
         let body = bodies + i * 0xb0;
         let layer = u32_at(body + 0x6c) & 0xff;
-        if unsafe { *((body + 0x60) as *const usize) } == 0 || (layer != 0x1e && layer != 0x3a) {
+        let shape = unsafe { *((body + 0x60) as *const usize) };
+        if shape == 0 || !matches!(layer, 0x1e | 0x3a | 0x49 | 0x55) || u32_at(body + 0x78) == u32::MAX {
             continue;
         }
         let p = vec3_at(body + 0x30);
-        if (p - center).length() < range {
-            out.push((i as u32, p, layer));
+        if (p - center).length() >= range {
+            continue;
         }
+        // 0x49 / 0x55: small clutter (pots, jars, stools, debris) are boxes; anything else there
+        // is map collision
+        if matches!(layer, 0x49 | 0x55) && class_of(shape).as_deref() != Some("hknpBoxShape") {
+            continue;
+        }
+        // one target for a cluster of pieces (a hit breaks everything around it anyway)
+        if out.iter().any(|(_, q, _): &(u32, Vec3, u32)| q.distance(p) < 0.6) {
+            continue;
+        }
+        out.push((i as u32, p, layer));
     }
     out
 }
@@ -361,6 +435,38 @@ impl HavokCollision {
                         continue;
                     }
                     lines.push(format!("  undecoded body #{i} layer {:#x} class {:?}", u32_at(body + 0x6c), class_of(shape)));
+                    // a compressed mesh we couldn't read: which pointer in its header is the mesh data?
+                    if class_of(shape).is_some_and(|c| c.contains("CompressedMeshShape")) && readable(shape, 0xa0) {
+                        for off in (0x08..0xa0).step_by(8) {
+                            let md = unsafe { *((shape + off) as *const usize) };
+                            if md < 0x10000 || !readable(md, 0xb0) {
+                                continue;
+                            }
+                            let n = decode(md).map(|t| t.len());
+                            lines.push(format!("    shape +{off:#x} -> {md:#x}: decode {n:?}"));
+                            if off == 0x48 {
+                                // the data's arrays (pointer, count, capacity) and the rest as words
+                                let mut row = Vec::new();
+                                for o in (0x00..0x180).step_by(8) {
+                                    if !readable(md + o, 16) {
+                                        break;
+                                    }
+                                    let p = unsafe { *((md + o) as *const u64) };
+                                    let n = u32_at(md + o + 8);
+                                    let cap = u32_at(md + o + 12);
+                                    if p > 0x10000 && p >> 47 == 0 && n > 0 && n < 10_000_000 && (cap & 0x3fff_ffff) >= n {
+                                        row.push(format!("+{o:#x}: array[{n}]"));
+                                    }
+                                }
+                                lines.push(format!("      data arrays: {}", row.join(", ")));
+                                let words: Vec<String> = (0..0x60).step_by(4).map(|o| format!("{:08x}", u32_at(md + 0x20 + o))).collect();
+                                lines.push(format!("      data +0x20..: {}", words.join(" ")));
+                                // the shape object itself, words
+                                let words: Vec<String> = (0..0xa0).step_by(4).map(|o| format!("{:08x}", u32_at(shape + o))).collect();
+                                lines.push(format!("      shape: {}", words.join(" ")));
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -389,6 +495,11 @@ impl HavokCollision {
     }
 
     /// Whether body `i` is a convex shape (box, hull, cylinder): its faces all point outwards.
+    /// Whether this body collides as its box (see `boxed`).
+    pub fn is_boxed(&self, i: u32) -> bool {
+        self.boxed.contains(&self.shape_of(i))
+    }
+
     pub fn is_convex(&self, i: u32) -> bool {
         self.convex.contains_key(&self.shape_of(i))
     }
@@ -448,6 +559,12 @@ impl HavokCollision {
                 *seen_layers.entry(layer).or_default() += 1;
                 continue;
             }
+            // taken out of the physics world (+0x78 broadphase id -1): an opened door's blocker,
+            // a broken crate... the body stays in the list but nothing collides with it
+            if u32_at(body + 0x78) == u32::MAX {
+                self.not_in_world += 1;
+                continue;
+            }
             n_layer_ok += 1;
             // shapes get freed and re-allocated as the world streams: validate the cache entry
             // unknown shapes (and stale pointers in unused body slots) get one real memory check,
@@ -481,7 +598,7 @@ impl HavokCollision {
                 _ => {
                     n_decoded += 1;
                     if self.queries == 0 {
-                        log(format!("  decoding body {i} layer {layer:#x} shape {shape:#x} md {md:#x} class {:?}", class_of(shape)));
+                        crate::dlog(format!("  decoding body {i} layer {layer:#x} shape {shape:#x} md {md:#x} class {:?}", class_of(shape)));
                     }
                     let cls = class_of(shape).unwrap_or_default();
                     if cls.contains("ConvexPolytopeShape") || cls.contains("BoxShape") || cls.contains("CylinderShape") {
@@ -491,7 +608,14 @@ impl HavokCollision {
                         m
                     } else {
                     let tris = if cls.contains("CompressedMeshShape") {
-                        decode(md)
+                        decode(md).filter(|t| !t.is_empty()).or_else(|| {
+                            let b = custom_pieces_box(md);
+                            if b.is_some() {
+                                self.boxed.insert(shape);
+                                log(format!("collision: body {i} (layer {layer:#x}) is custom pieces only: using its box"));
+                            }
+                            b
+                        })
                     } else if cls.contains("CompoundShape") {
                         decode_compound(shape)
                     } else {
@@ -557,7 +681,7 @@ impl HavokCollision {
         self.last_bodies = out.iter().map(|t| t.2).collect();
         self.queries += 1;
         if self.queries % 10 == 1 {
-            log(format!(
+            crate::dlog(format!(
                 "havok query: {:.1} ms, bodies {count}, layer ok {n_layer_ok}, decoded {n_decoded}, near {n_near}, picked {n_picked}, out {}",
                 t_start.elapsed().as_secs_f32() * 1000.0, out.len()
             ));

@@ -26,28 +26,122 @@ const OPEN_FOR: f32 = 3.0;
 /// (its death ragdoll, never used here). Amount 1 = all ragdoll.
 const RAGDOLL_FULL: f32 = 0.99;
 const DOWN_FOR: f32 = 2.0;
-const GET_UP: f32 = 1.0;
+/// A ragdoll going faster than this by itself is running away (on a mounted boss it gained speed
+/// on its own, 41 -> 58 m/s, until the physics hung the game): that throw's ragdoll ends at once.
+/// It only happens on some throws, so the boss keeps his ragdoll for the next ones.
+const RUNAWAY_MIN: f32 = 35.0;
+const RUNAWAY_DOWN: f32 = 30.0;
 
-fn ragdoll_on() -> bool {
-    crate::paths::config("boss_ragdoll").is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "on" | "1" | "true" | "yes"))
+/// Character ids (cXXXX) that never go ragdoll: `no_ragdoll` in er_mario.ini (e.g. "4750, 3251").
+fn no_ragdoll_ids() -> Vec<u32> {
+    crate::paths::config("no_ragdoll")
+        .map(|v| v.split(|c: char| c == ',' || c.is_whitespace()).filter_map(|t| t.trim().trim_start_matches(['c', 'C']).parse().ok()).collect())
+        .unwrap_or_default()
 }
 
-/// Ragdoll amount 0..1 (0 = back to normal animation).
+fn ragdoll_allowed(chr: &eldenring::cs::ChrIns) -> bool {
+    ragdoll_on() && chr.chr_ctrl.ragdoll_ins != 0 && !no_ragdoll_ids().contains(&chr.character_id)
+}
+
+/// A runaway ragdoll: ended now, the boss protected while he settles.
+fn runaway(chr: &mut eldenring::cs::ChrIns, v: f32) {
+    set_ragdoll(chr, 0.0);
+    clear_fall(chr);
+    chr.modules.physics.gravity_disabled = false;
+    log(format!("swing: runaway ragdoll on c{:04} ({v:.1} m/s): ended for this throw", chr.character_id));
+}
+const GET_UP: f32 = 1.0;
+
+/// Thrown bosses go limp: on unless `boss_ragdoll = off` in er_mario.ini.
+fn ragdoll_on() -> bool {
+    !crate::paths::config("boss_ragdoll").is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "off" | "0" | "false" | "no"))
+}
+
+/// Ragdoll amount 0..1 (0 = back to normal animation). The game's ragdoll states (ChrCtrl +0x128,
+/// synced into the ragdoll each frame by 0x1403cca60): 0 off, 2 full (death), 3 full, 4 blend.
+/// Which one we use: boss_ragdoll_state in er_mario.ini (default 2: the full ragdoll with map
+/// collision; the boss must not be hit while in it, it counts as dead then, and it is switched
+/// back to 0 after DOWN_FOR, which gets him back up).
 fn set_ragdoll(chr: &mut eldenring::cs::ChrIns, amount: f32) {
+    let state = crate::paths::config("boss_ragdoll_state").and_then(|v| v.parse().ok()).unwrap_or(2u8);
     let c = &mut chr.chr_ctrl;
     if amount <= 0.0 {
         c.chr_ragdoll_state = 0;
         c.ragdoll_revive_time = 1.0;
-    } else {
+    } else if state == 4 {
         c.chr_ragdoll_state = 4;
         c.ragdoll_revive_time = amount.min(RAGDOLL_FULL);
+    } else {
+        c.chr_ragdoll_state = state;
     }
+}
+
+/// While thrown and down: no falling as far as the game is concerned (its fall damage kills), and
+/// his HP no lower than `guard` (0 = not set yet).
+fn protect(chr: &mut eldenring::cs::ChrIns, guard: &mut i32) {
+    chr.modules.fall.fall_timer = 0.0;
+    let hp = chr.modules.data.hp;
+    if *guard <= 0 {
+        *guard = hp;
+    } else if hp < *guard {
+        chr.modules.data.hp = *guard;
+    }
+}
+
+/// Thrown off the map (far below where he was thrown from, or falling for long): back where
+/// Mario threw him from, standing, like Bowser jumping back onto his platform.
+/// Thrown off the map: far below where he was thrown from, or falling nonstop for a long time.
+fn off_the_map(chr: &eldenring::cs::ChrIns, home: Vec3, falling_for: f32) -> bool {
+    let y = chr.modules.physics.position.1;
+    let gone = y < home.y - 25.0 || falling_for > 5.0;
+    if gone {
+        log(format!("swing: off the map at {:.1} m below the throw, falling for {falling_for:.1} s", home.y - y));
+    }
+    gone
+}
+
+fn bring_back(chr: &mut eldenring::cs::ChrIns, home: Vec3) {
+    set_ragdoll(chr, 0.0);
+    hold_at(chr, home);
+    log("swing: thrown off the map: he's back where he was thrown from");
+}
+
+/// At `home`, not falling, and the game's fell-out-of-the-world flag cleared (CSChrFallModule
+/// +0x1C, next to the fall timer).
+fn hold_at(chr: &mut eldenring::cs::ChrIns, home: Vec3) {
+    let ph = &mut chr.modules.physics;
+    ph.position = HavokPosition(home.x, home.y + 0.5, home.z, 0.0);
+    ph.chr_proxy_pos_update_requested = true;
+    ph.gravity_disabled = false;
+    let fall = &mut chr.modules.fall;
+    fall.fall_timer = 0.0;
+    unsafe { *((&mut **fall as *mut eldenring::cs::CSChrFallModule as *mut u8).add(0x1C)) = 0 };
+}
+
+/// No falling as far as the game is concerned: fall timer and fell-out-of-the-world flag
+/// (CSChrFallModule +0x1C) cleared.
+fn clear_fall(chr: &mut eldenring::cs::ChrIns) {
+    let fall = &mut chr.modules.fall;
+    fall.fall_timer = 0.0;
+    unsafe { *((&mut **fall as *mut eldenring::cs::CSChrFallModule as *mut u8).add(0x1C)) = 0 };
+}
+
+/// Whether Mario has a boss by the tail (the boss can't hurt him then).
+pub fn holding() -> bool {
+    matches!(STATE.lock().unwrap_or_else(|e| e.into_inner()).phase, Phase::Held { .. })
+}
+
+/// Whether Mario is doing something with this boss (holding, throwing, or he's down or settling
+/// from a throw): his final blow waits for the throw's impact.
+pub fn busy_with(h: &FieldInsHandle) -> bool {
+    let st = STATE.lock().unwrap_or_else(|e| e.into_inner());
+    matches!(st.phase, Phase::Held { boss, .. } | Phase::Flying { boss, .. } | Phase::Limp { boss, .. } | Phase::Down { boss, .. } | Phase::Settling { boss, .. } if key(&boss) == key(h))
 }
 
 /// Whether this boss is lying there after a throw (no damage then).
 pub fn is_down(h: &FieldInsHandle) -> bool {
     let st = STATE.lock().unwrap_or_else(|e| e.into_inner());
-    matches!(st.phase, Phase::Down { boss, .. } if key(&boss) == key(h)) || matches!(st.phase, Phase::Flying { boss, .. } if key(&boss) == key(h))
+    matches!(st.phase, Phase::Down { boss, .. } | Phase::Flying { boss, .. } | Phase::Limp { boss, .. } | Phase::Returning { boss, .. } if key(&boss) == key(h))
 }
 
 /// Mario's stagger meter per boss hit (% of full); it drains after a few seconds without hits
@@ -72,10 +166,21 @@ enum Phase {
     Flying { boss: FieldInsHandle, pos: Vec3, vel: Vec3, since: Instant, radius: f32 },
     /// knocked flat after the impact (his ragdoll), until he gets back up
     Down { boss: FieldInsHandle, until: Instant },
+    /// landed without a ragdoll (big bosses): a moment of protection while the game settles him
+    /// (he can stay in his falling animation, and the game's fall death would take him)
+    Settling { boss: FieldInsHandle, until: Instant },
+    /// brought back after a throw off the map: held there a moment (the ragdoll lets go, the
+    /// game's out-of-the-world check is kept off)
+    Returning { boss: FieldInsHandle, until: Instant },
+    /// flying limp: his ragdoll carries the throw's speed (the physics moves him now); `peak` the
+    /// fastest he went, `still` how long he's barely moved
+    Limp { boss: FieldInsHandle, last: Vec3, peak: f32, since: Instant, still: f32, frames: u32 },
 }
 
 struct State {
     phase: Phase,
+    /// how long the thrown boss has been falling without a break (s)
+    falling: f32,
     /// bosses whose stance just broke: (handle, until)
     open: Vec<(FieldInsHandle, Instant)>,
     /// per boss: poise last frame (a break shows as a drop to zero or a reset to full)
@@ -85,10 +190,19 @@ struct State {
     /// Mario's face angle last tick (the swing's speed)
     last_face: Option<f32>,
     spin: f32,
+    /// the downed boss's last position and how long he's lain still
+    rest: (Vec3, f32),
+    /// the speed the boss went limp at (a ragdoll much faster than that is running away)
+    throw_speed: f32,
+    /// the thrown boss's HP floor while flying / lying (nothing but the throw's own impact may
+    /// take more: the game's fall damage would kill him)
+    guard_hp: i32,
+    /// where he was thrown from (a throw off the map brings him back here, like SM64's Bowser)
+    home: Vec3,
 }
 
 static STATE: Mutex<State> =
-    Mutex::new(State { phase: Phase::Idle, open: Vec::new(), toughness: Vec::new(), meter: Vec::new(), last_face: None, spin: 0.0 });
+    Mutex::new(State { phase: Phase::Idle, falling: 0.0, open: Vec::new(), toughness: Vec::new(), meter: Vec::new(), last_face: None, spin: 0.0, rest: (Vec3::ZERO, 0.0), throw_speed: 0.0, guard_hp: 0, home: Vec3::ZERO });
 /// the stagger cue to play (SM64 thread)
 static CUE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -145,6 +259,25 @@ pub fn watch_stances(bosses: &[FieldInsHandle]) {
         }
     }
     st.meter.retain(|e| e.1 > 0.0);
+    // research: every boss animation change (to see whether knockdown / stagger IDs are shared)
+    {
+        static LAST: Mutex<Vec<(u64, i32)>> = Mutex::new(Vec::new());
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        for h in bosses {
+            let Some(chr) = wcm.chr_ins_by_handle(h) else { continue };
+            let t = &chr.modules.time_act;
+            let anim = t.anim_queue[(t.read_idx % 10) as usize].anim_id;
+            let k = key(h);
+            match last.iter_mut().find(|(kk, _)| *kk == k) {
+                Some(e) if e.1 == anim => {}
+                Some(e) => {
+                    crate::dlog(format!("boss anim: c{:04} {} -> {anim}", chr.character_id, e.1));
+                    e.1 = anim;
+                }
+                None => last.push((k, anim)),
+            }
+        }
+    }
     for h in bosses {
         let Some(chr) = wcm.chr_ins_by_handle(h) else { continue };
         // (enemies' stance is their poise: the toughness module is the player's)
@@ -221,12 +354,27 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                 st.phase = Phase::Idle;
                 return None;
             };
-            // lying limp, then blending back into his own animation
+            protect(chr, &mut st.guard_hp);
+            // he gets back up only once he's lying still (switching a ragdoll off while it still
+            // tumbles crashed the game): barely moving for half a second, at least DOWN_FOR after
+            // landing, and after 8 s once he's merely slow
+            let p = chr.modules.physics.position;
+            let now = Vec3::new(p.0, p.1, p.2);
+            let v = (now - st.rest.0).length() / dt.max(1e-3);
+            st.rest = (now, if v < 0.5 { st.rest.1 + dt } else { 0.0 });
+            if off_the_map(chr, st.home, 0.0) {
+                bring_back(chr, st.home);
+                st.phase = Phase::Returning { boss, until: Instant::now() + std::time::Duration::from_secs(2) };
+                return None;
+            }
             let left = until.saturating_duration_since(Instant::now()).as_secs_f32();
-            if left > GET_UP {
+            let waited = DOWN_FOR + GET_UP - left;
+            let at_rest = st.rest.1 > 0.5 || (waited > 8.0 && v < 3.0);
+            if waited > 0.3 && v > RUNAWAY_DOWN {
+                runaway(chr, v);
+                st.phase = Phase::Settling { boss, until: Instant::now() + std::time::Duration::from_secs(2) };
+            } else if left > 0.0 || !at_rest {
                 set_ragdoll(chr, RAGDOLL_FULL);
-            } else if left > 0.0 {
-                set_ragdoll(chr, RAGDOLL_FULL * left / GET_UP);
             } else {
                 set_ragdoll(chr, 0.0);
                 log("swing: boss back on his feet");
@@ -234,11 +382,93 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
             }
             None
         }
+        Phase::Settling { boss, until } => {
+            let Some(chr) = wcm.chr_ins_by_handle_mut(&boss) else {
+                st.phase = Phase::Idle;
+                return None;
+            };
+            protect(chr, &mut st.guard_hp);
+            clear_fall(chr);
+            // until he's back on the ground (he can hang in his falling animation for a while)
+            let grounded = chr.modules.physics.is_touching_ground;
+            let over = Instant::now() >= until;
+            if (over && grounded) || over && Instant::now() >= until + std::time::Duration::from_secs(8) {
+                if !grounded {
+                    log("swing: boss still not on the ground 10 s after landing, protection ends");
+                }
+                st.phase = Phase::Idle;
+                st.guard_hp = 0;
+            }
+            None
+        }
+        Phase::Returning { boss, until } => {
+            let Some(chr) = wcm.chr_ins_by_handle_mut(&boss) else {
+                st.phase = Phase::Idle;
+                return None;
+            };
+            protect(chr, &mut st.guard_hp);
+            set_ragdoll(chr, 0.0);
+            hold_at(chr, st.home);
+            if Instant::now() >= until {
+                log("swing: boss back in the fight");
+                st.phase = Phase::Idle;
+            }
+            None
+        }
+        Phase::Limp { boss, last, peak, since, still, frames } => {
+            let Some(chr) = wcm.chr_ins_by_handle_mut(&boss) else {
+                st.phase = Phase::Idle;
+                return None;
+            };
+            protect(chr, &mut st.guard_hp);
+            let p = chr.modules.physics.position;
+            let now = Vec3::new(p.0, p.1, p.2);
+            let v = (now - last).length() / dt.max(1e-3);
+            if frames < 6 {
+                crate::dlog(format!("swing: limp frame {frames}: speed {v:.1} m/s"));
+            }
+            // (the first frames jump as the character snaps to the ragdoll's hips: not speed)
+            let settle = frames < 3;
+            // `peak` is his smoothed speed here
+            let speed = if settle { peak } else { peak * 0.6 + v * 0.4 };
+            let still = if v < 1.0 { still + dt } else { 0.0 };
+            let age = since.elapsed().as_secs_f32();
+            if !settle && v > (st.throw_speed * 1.4).max(RUNAWAY_MIN) {
+                runaway(chr, v);
+                st.phase = Phase::Settling { boss, until: Instant::now() + std::time::Duration::from_secs(2) };
+                st.guard_hp = 0;
+                return None;
+            }
+            // falling nonstop (a frame of real drop, not the ragdoll's jitter)
+            st.falling = if now.y < last.y - 0.01 { st.falling + dt } else { 0.0 };
+            if off_the_map(chr, st.home, st.falling) {
+                bring_back(chr, st.home);
+                st.phase = Phase::Returning { boss, until: Instant::now() + std::time::Duration::from_secs(2) };
+                st.guard_hp = 0;
+                return Some((boss, IMPACT_MAX));
+            }
+            // the impact: his speed collapses, he runs into the map, or he's come to rest
+            let stopped = !settle && v < speed * 0.35;
+            let into_map = !settle && hit(last + Vec3::Y * 0.5, now + Vec3::Y * 0.5).is_some();
+            if stopped || into_map || still > 0.3 || age > 4.0 {
+                let pct = IMPACT_MIN + (IMPACT_MAX - IMPACT_MIN) * ((speed - 10.0) / 30.0).clamp(0.0, 1.0);
+                log(format!("swing: limp boss landed at {speed:.1} m/s (stopped {stopped}, map {into_map}): {pct:.0}% of his HP"));
+                st.phase = Phase::Down { boss, until: Instant::now() + std::time::Duration::from_secs_f32(DOWN_FOR + GET_UP) };
+                st.rest = (now, 0.0);
+                // the guard takes his HP after this impact's damage as the new floor
+                st.guard_hp = 0;
+                return Some((boss, pct));
+            }
+            st.phase = Phase::Limp { boss, last: now, peak: speed, since, still, frames: frames + 1 };
+            None
+        }
         Phase::Held { boss, reach } => {
             let Some(chr) = wcm.chr_ins_by_handle_mut(&boss) else {
                 st.phase = Phase::Idle;
                 return None;
             };
+            // (held off the ground: the game would count it as falling)
+            clear_fall(chr);
             let holding = action == ACT_PICKING_UP_BOWSER || action == ACT_HOLDING_BOWSER;
             let released = action == ACT_RELEASING_BOWSER;
             let ph = &mut chr.modules.physics;
@@ -258,12 +488,15 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                 let vel = fwd * speed + Vec3::Y * 9.0;
                 let pos = Vec3::new(ph.position.0, ph.position.1, ph.position.2);
                 log(format!("swing: thrown at {speed:.1} m/s"));
+                st.guard_hp = 0;
+                st.home = mario;
                 let radius = (reach - 0.9).max(0.4);
                 st.phase = Phase::Flying { boss, pos, vel, since: Instant::now(), radius };
                 None
             } else {
                 // let go some other way (hurt, fell): just drop him
                 ph.gravity_disabled = false;
+                log(format!("swing: let go without a throw (action {action:#x})"));
                 st.phase = Phase::Idle;
                 None
             }
@@ -273,6 +506,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                 st.phase = Phase::Idle;
                 return None;
             };
+            protect(chr, &mut st.guard_hp);
             let ph = &mut chr.modules.physics;
             let mut vel = vel;
             vel.y -= GRAVITY * dt;
@@ -293,23 +527,37 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                     // (experiment, boss_ragdoll = on) he collapses where he hit: the game's
                     // blendable ragdoll (state 4), not its death ragdoll (state 2). Not in the air:
                     // the ragdoll's bodies don't get his flight's speed and would stretch him
-                    if ragdoll_on() && chr.chr_ctrl.ragdoll_ins != 0 {
+                    if ragdoll_allowed(chr) {
                         set_ragdoll(chr, RAGDOLL_FULL);
                         log("swing: ragdoll on impact");
                     }
+                    st.rest = (rest, 0.0);
                     st.phase = if chr.chr_ctrl.chr_ragdoll_state != 0 {
                         Phase::Down { boss, until: Instant::now() + std::time::Duration::from_secs_f32(DOWN_FOR + GET_UP) }
                     } else {
-                        Phase::Idle
+                        Phase::Settling { boss, until: Instant::now() + std::time::Duration::from_secs(2) }
                     };
                     let pct = IMPACT_MIN + (IMPACT_MAX - IMPACT_MIN) * ((speed - 10.0) / 30.0).clamp(0.0, 1.0);
                     log(format!("swing: boss hit something at {speed:.1} m/s: {pct:.0}% of his HP"));
+                    st.guard_hp = 0;
                     Some((boss, pct))
                 }
-                _ if since.elapsed().as_secs_f32() > 4.0 => {
-                    ph.gravity_disabled = false;
-                    set_ragdoll(chr, 0.0);
-                    st.phase = Phase::Idle;
+                _ if since.elapsed().as_secs_f32() > 4.0 || next.y < st.home.y - 15.0 => {
+                    let home = st.home;
+                    bring_back(chr, home);
+                    st.phase = Phase::Returning { boss, until: Instant::now() + std::time::Duration::from_secs(2) };
+                    st.guard_hp = 0;
+                    Some((boss, IMPACT_MAX))
+                }
+                _ if ragdoll_allowed(chr) && since.elapsed().as_secs_f32() > 0.1 => {
+                    // a few frames of guided flight gave his ragdoll's bodies the throw's speed:
+                    // limp from here, the physics flies him (gravity, collision)
+                    set_ragdoll(chr, RAGDOLL_FULL);
+                    chr.modules.physics.gravity_disabled = false;
+                    log(format!("swing: limp flight at {speed:.1} m/s"));
+                    st.throw_speed = speed;
+                    st.falling = 0.0;
+                    st.phase = Phase::Limp { boss, last: pos, peak: speed, since: Instant::now(), still: 0.0, frames: 0 };
                     None
                 }
                 _ => {
@@ -329,7 +577,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
 pub fn reset() {
     let mut st = STATE.lock().unwrap_or_else(|e| e.into_inner());
     let boss = match st.phase {
-        Phase::Held { boss, .. } | Phase::Flying { boss, .. } | Phase::Down { boss, .. } => Some(boss),
+        Phase::Held { boss, .. } | Phase::Flying { boss, .. } | Phase::Down { boss, .. } | Phase::Limp { boss, .. } | Phase::Returning { boss, .. } | Phase::Settling { boss, .. } => Some(boss),
         Phase::Idle => None,
     };
     if let (Some(boss), Ok(wcm)) = (boss, unsafe { WorldChrMan::instance_mut() }) {
