@@ -1334,8 +1334,10 @@ fn frame(data: &FD4TaskData) {
                 .cast_ray(RAY_FILTER, &HavokPosition(from.x, from.y, from.z, 0.0), eldenring::position::PositionDelta(d.x, d.y, d.z), player_ref)
                 .map(|h| glam::Vec3::new(h.0, h.1, h.2))
         });
-        if let Some((mob, pct)) = impact {
-            combat::impact(&mut m.combat, &mob, pct, m.ticks);
+        for (mob, pct) in &impact {
+            combat::impact(&mut m.combat, mob, *pct, m.ticks);
+        }
+        if !impact.is_empty() {
             worker::call("impact sound", |_| unsafe { sm64::sm64_play_sound_global(carry::SOUND_IMPACT) });
         }
     }

@@ -116,7 +116,7 @@ const BOSS_FACTOR: f32 = 0.05;
 
 /// Team types on the player's side (the player, co-op phantoms, summons and spirit ashes): Mario
 /// doesn't hurt those. Everyone else can be hit, friendly NPCs included, like with a weapon.
-fn own_side(team: u8) -> bool {
+pub fn own_side(team: u8) -> bool {
     matches!(team, 1 | 2 | 5 | 12)
 }
 
