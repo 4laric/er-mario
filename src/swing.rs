@@ -72,18 +72,26 @@ fn off_the_map(chr: &eldenring::cs::ChrIns, home: Vec3, falling_for: f32) -> boo
 
 fn bring_back(chr: &mut eldenring::cs::ChrIns, home: Vec3) {
     set_ragdoll(chr, 0.0);
+    hold_at(chr, home);
+    log("swing: thrown off the map: he's back where he was thrown from");
+}
+
+/// At `home`, not falling, and the game's fell-out-of-the-world flag cleared (CSChrFallModule
+/// +0x1C, next to the fall timer).
+fn hold_at(chr: &mut eldenring::cs::ChrIns, home: Vec3) {
     let ph = &mut chr.modules.physics;
     ph.position = HavokPosition(home.x, home.y + 0.5, home.z, 0.0);
     ph.chr_proxy_pos_update_requested = true;
     ph.gravity_disabled = false;
-    chr.modules.fall.fall_timer = 0.0;
-    log("swing: thrown off the map: he's back where he was thrown from");
+    let fall = &mut chr.modules.fall;
+    fall.fall_timer = 0.0;
+    unsafe { *((&mut **fall as *mut eldenring::cs::CSChrFallModule as *mut u8).add(0x1C)) = 0 };
 }
 
 /// Whether this boss is lying there after a throw (no damage then).
 pub fn is_down(h: &FieldInsHandle) -> bool {
     let st = STATE.lock().unwrap_or_else(|e| e.into_inner());
-    matches!(st.phase, Phase::Down { boss, .. } | Phase::Flying { boss, .. } | Phase::Limp { boss, .. } if key(&boss) == key(h))
+    matches!(st.phase, Phase::Down { boss, .. } | Phase::Flying { boss, .. } | Phase::Limp { boss, .. } | Phase::Returning { boss, .. } if key(&boss) == key(h))
 }
 
 /// Mario's stagger meter per boss hit (% of full); it drains after a few seconds without hits
@@ -108,6 +116,9 @@ enum Phase {
     Flying { boss: FieldInsHandle, pos: Vec3, vel: Vec3, since: Instant, radius: f32 },
     /// knocked flat after the impact (his ragdoll), until he gets back up
     Down { boss: FieldInsHandle, until: Instant },
+    /// brought back after a throw off the map: held there a moment (the ragdoll lets go, the
+    /// game's out-of-the-world check is kept off)
+    Returning { boss: FieldInsHandle, until: Instant },
     /// flying limp: his ragdoll carries the throw's speed (the physics moves him now); `peak` the
     /// fastest he went, `still` how long he's barely moved
     Limp { boss: FieldInsHandle, last: Vec3, peak: f32, since: Instant, still: f32, frames: u32 },
@@ -277,7 +288,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
             st.rest = (now, if v < 0.5 { st.rest.1 + dt } else { 0.0 });
             if off_the_map(chr, st.home, 0.0) {
                 bring_back(chr, st.home);
-                st.phase = Phase::Idle;
+                st.phase = Phase::Returning { boss, until: Instant::now() + std::time::Duration::from_secs(2) };
                 return None;
             }
             let left = until.saturating_duration_since(Instant::now()).as_secs_f32();
@@ -288,6 +299,20 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
             } else {
                 set_ragdoll(chr, 0.0);
                 log("swing: boss back on his feet");
+                st.phase = Phase::Idle;
+            }
+            None
+        }
+        Phase::Returning { boss, until } => {
+            let Some(chr) = wcm.chr_ins_by_handle_mut(&boss) else {
+                st.phase = Phase::Idle;
+                return None;
+            };
+            protect(chr, &mut st.guard_hp);
+            set_ragdoll(chr, 0.0);
+            hold_at(chr, st.home);
+            if Instant::now() >= until {
+                log("swing: boss back in the fight");
                 st.phase = Phase::Idle;
             }
             None
@@ -312,7 +337,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
             let age = since.elapsed().as_secs_f32();
             if off_the_map(chr, st.home, if now.y < last.y { age } else { 0.0 }) {
                 bring_back(chr, st.home);
-                st.phase = Phase::Idle;
+                st.phase = Phase::Returning { boss, until: Instant::now() + std::time::Duration::from_secs(2) };
                 st.guard_hp = 0;
                 return Some((boss, IMPACT_MAX));
             }
@@ -411,7 +436,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                 _ if since.elapsed().as_secs_f32() > 4.0 || next.y < st.home.y - 15.0 => {
                     let home = st.home;
                     bring_back(chr, home);
-                    st.phase = Phase::Idle;
+                    st.phase = Phase::Returning { boss, until: Instant::now() + std::time::Duration::from_secs(2) };
                     st.guard_hp = 0;
                     Some((boss, IMPACT_MAX))
                 }
@@ -441,7 +466,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
 pub fn reset() {
     let mut st = STATE.lock().unwrap_or_else(|e| e.into_inner());
     let boss = match st.phase {
-        Phase::Held { boss, .. } | Phase::Flying { boss, .. } | Phase::Down { boss, .. } | Phase::Limp { boss, .. } => Some(boss),
+        Phase::Held { boss, .. } | Phase::Flying { boss, .. } | Phase::Down { boss, .. } | Phase::Limp { boss, .. } | Phase::Returning { boss, .. } => Some(boss),
         Phase::Idle => None,
     };
     if let (Some(boss), Ok(wcm)) = (boss, unsafe { WorldChrMan::instance_mut() }) {
