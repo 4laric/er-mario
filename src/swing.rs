@@ -54,7 +54,7 @@ fn set_ragdoll(chr: &mut eldenring::cs::ChrIns, amount: f32) {
 /// Whether this boss is lying there after a throw (no damage then).
 pub fn is_down(h: &FieldInsHandle) -> bool {
     let st = STATE.lock().unwrap_or_else(|e| e.into_inner());
-    matches!(st.phase, Phase::Down { boss, .. } if key(&boss) == key(h)) || matches!(st.phase, Phase::Flying { boss, .. } if key(&boss) == key(h))
+    matches!(st.phase, Phase::Down { boss, .. } | Phase::Flying { boss, .. } | Phase::Limp { boss, .. } if key(&boss) == key(h))
 }
 
 /// Mario's stagger meter per boss hit (% of full); it drains after a few seconds without hits
@@ -79,6 +79,9 @@ enum Phase {
     Flying { boss: FieldInsHandle, pos: Vec3, vel: Vec3, since: Instant, radius: f32 },
     /// knocked flat after the impact (his ragdoll), until he gets back up
     Down { boss: FieldInsHandle, until: Instant },
+    /// flying limp: his ragdoll carries the throw's speed (the physics moves him now); `peak` the
+    /// fastest he went, `still` how long he's barely moved
+    Limp { boss: FieldInsHandle, last: Vec3, peak: f32, since: Instant, still: f32, frames: u32 },
 }
 
 struct State {
@@ -241,6 +244,32 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
             }
             None
         }
+        Phase::Limp { boss, last, peak, since, still, frames } => {
+            let Some(chr) = wcm.chr_ins_by_handle_mut(&boss) else {
+                st.phase = Phase::Idle;
+                return None;
+            };
+            let p = chr.modules.physics.position;
+            let now = Vec3::new(p.0, p.1, p.2);
+            let v = (now - last).length() / dt.max(1e-3);
+            if frames < 10 {
+                log(format!("swing: limp frame {frames}: speed {v:.1} m/s at {now:.2?}"));
+            }
+            let peak = peak.max(v);
+            let still = if v < 1.0 { still + dt } else { 0.0 };
+            let age = since.elapsed().as_secs_f32();
+            // the impact: his flight stops short, he runs into the map, or he's come to rest
+            let stopped = age > 0.15 && v < peak * 0.3;
+            let into_map = age > 0.05 && hit(last + Vec3::Y * 0.5, now + Vec3::Y * 0.5).is_some();
+            if stopped || into_map || still > 0.3 || age > 3.0 {
+                let pct = IMPACT_MIN + (IMPACT_MAX - IMPACT_MIN) * ((peak - 10.0) / 30.0).clamp(0.0, 1.0);
+                log(format!("swing: limp boss landed (peak {peak:.1} m/s, stopped {stopped}, map {into_map}): {pct:.0}% of his HP"));
+                st.phase = Phase::Down { boss, until: Instant::now() + std::time::Duration::from_secs_f32(DOWN_FOR + GET_UP) };
+                return Some((boss, pct));
+            }
+            st.phase = Phase::Limp { boss, last: now, peak, since, still, frames: frames + 1 };
+            None
+        }
         Phase::Held { boss, reach } => {
             let Some(chr) = wcm.chr_ins_by_handle_mut(&boss) else {
                 st.phase = Phase::Idle;
@@ -319,6 +348,15 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                     st.phase = Phase::Idle;
                     None
                 }
+                _ if ragdoll_on() && chr.chr_ctrl.ragdoll_ins != 0 && since.elapsed().as_secs_f32() > 0.1 => {
+                    // a few frames of guided flight gave his ragdoll's bodies the throw's speed:
+                    // limp from here, the physics flies him (gravity, collision)
+                    set_ragdoll(chr, RAGDOLL_FULL);
+                    chr.modules.physics.gravity_disabled = false;
+                    log(format!("swing: limp flight at {speed:.1} m/s"));
+                    st.phase = Phase::Limp { boss, last: pos, peak: speed, since: Instant::now(), still: 0.0, frames: 0 };
+                    None
+                }
                 _ => {
                     let ph = &mut chr.modules.physics;
                     ph.position = HavokPosition(next.x, next.y, next.z, 0.0);
@@ -336,7 +374,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
 pub fn reset() {
     let mut st = STATE.lock().unwrap_or_else(|e| e.into_inner());
     let boss = match st.phase {
-        Phase::Held { boss, .. } | Phase::Flying { boss, .. } | Phase::Down { boss, .. } => Some(boss),
+        Phase::Held { boss, .. } | Phase::Flying { boss, .. } | Phase::Down { boss, .. } | Phase::Limp { boss, .. } => Some(boss),
         Phase::Idle => None,
     };
     if let (Some(boss), Ok(wcm)) = (boss, unsafe { WorldChrMan::instance_mut() }) {
