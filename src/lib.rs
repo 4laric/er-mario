@@ -807,9 +807,15 @@ fn input_task() {
     // research (debug): which action bits a press makes, to find what NPC dialogue listens to
     if debug() {
         static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let presses = *bits(&mut req.new_action_presses);
+        let presses = *bits(&mut req.new_action_presses) | *bits(&mut req.action_requests) | *bits(&mut req.queued_action_inputs);
         if presses != 0 && LAST.swap(presses, Ordering::Relaxed) != presses {
-            log(format!("input: action presses {presses:#x} (requests {:#x}, possible {:#x})", *bits(&mut req.action_requests), *bits(&mut req.possible_action_inputs)));
+            log(format!(
+                "input: actions new {:#x} requests {:#x} queued {:#x} (possible {:#x})",
+                *bits(&mut req.new_action_presses),
+                *bits(&mut req.action_requests),
+                *bits(&mut req.queued_action_inputs),
+                *bits(&mut req.possible_action_inputs)
+            ));
         } else if presses == 0 {
             LAST.store(0, Ordering::Relaxed);
         }
