@@ -1839,7 +1839,17 @@ fn frame(data: &FD4TaskData) {
     }
 
     // debug Mario (F11): hide the Tarnished and draw Mario with the debug renderer instead
-    set_opacity(1.0);
+    // In a cutscene the game poses the character itself after Mario's pose is written (Mario
+    // crumples and the Tarnished's face shows): the player is hidden then. A cutscene = the world
+    // paused with no menu or prompt up (tutorials and prompts always have one).
+    let cutscene = WORLD_PAUSED.load(Ordering::Relaxed) && !m.dead && !MENU_OPEN.load(Ordering::Relaxed) && !game_menu_open();
+    {
+        static IN_CUTSCENE: AtomicBool = AtomicBool::new(false);
+        if IN_CUTSCENE.swap(cutscene, Ordering::Relaxed) != cutscene {
+            log(format!("cutscene: {}", if cutscene { "player hidden" } else { "over, player shown" }));
+        }
+    }
+    set_opacity(if cutscene { 0.0 } else { 1.0 });
 
     // event animations (fog walls, doors, ladders...): after an interact, if the Tarnished starts a
     // new animation, the game drives him and Mario follows until he's back to what he was doing
