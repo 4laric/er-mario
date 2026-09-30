@@ -704,7 +704,6 @@ fn pose_task_late() {
     if !ENABLED.load(Ordering::Relaxed) {
         return;
     }
-    hide_cutscene_copies(CUTSCENE_HIDE.load(Ordering::Relaxed));
     let Some(player) = (unsafe { WorldChrMan::instance() }).ok().and_then(|w| w.main_player.as_ref()) else { return };
     engine_mario::apply(&player.chr_ins as *const _ as usize, "LocationUpdate_PrePhysics");
 }
@@ -712,91 +711,6 @@ fn pose_task_late() {
 /// A cutscene is playing: the player isn't rendered (pose_task_late).
 static CUTSCENE_HIDE: AtomicBool = AtomicBool::new(false);
 
-/// Every character with the player's model (c0000: the Tarnished, human NPCs, and the copy of the
-/// Tarnished a cutscene makes, which wears his gear, Mario's chest mesh included, with none of
-/// Mario's posing), in every character list: (list name, character).
-fn player_model_characters(mut f: impl FnMut(&'static str, &mut eldenring::cs::ChrIns)) {
-    let Ok(wcm) = (unsafe { WorldChrMan::instance_mut() }) else { return };
-    let Some(main) = wcm.main_player.as_ref().map(|p| p.chr_ins.character_id) else { return };
-    for p in wcm.player_chr_set.characters() {
-        let c: &mut eldenring::cs::ChrIns = &mut p.chr_ins;
-        if c.character_id == main {
-            f("player", c);
-        }
-    }
-    for (name, set) in [("ghost", &wcm.ghost_chr_set), ("buddy", &wcm.summon_buddy_chr_set), ("debug", &wcm.debug_chr_set)] {
-        for c in set.characters() {
-            if c.character_id == main {
-                f(name, c);
-            }
-        }
-    }
-    for set in wcm.chr_sets.iter().flatten() {
-        for c in set.characters() {
-            if c.character_id == main {
-                f("map", c);
-            }
-        }
-    }
-}
-
-fn handle_u64(h: &eldenring::cs::FieldInsHandle) -> u64 {
-    unsafe { std::mem::transmute_copy::<eldenring::cs::FieldInsHandle, u64>(h) }
-}
-
-/// The cutscene's copy of the Tarnished: player-model characters that weren't there before the
-/// cutscene aren't rendered while it plays (pose_task_late, every task group up to Draw_Pre).
-fn hide_cutscene_copies(cutscene: bool) {
-    use std::time::{Duration, Instant};
-    // when each player-model character was first seen (kept up to date outside cutscenes)
-    static SEEN: Mutex<Vec<(u64, Instant)>> = Mutex::new(Vec::new());
-    static HIDDEN: Mutex<Vec<u64>> = Mutex::new(Vec::new());
-    static LAST_SCAN: Mutex<Option<Instant>> = Mutex::new(None);
-    static CUT_START: Mutex<Option<Instant>> = Mutex::new(None);
-    let main = unsafe { WorldChrMan::instance() }.ok().and_then(|w| w.main_player.as_ref().map(|p| handle_u64(&p.chr_ins.field_ins_handle)));
-    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
-    let mut hidden = HIDDEN.lock().unwrap_or_else(|e| e.into_inner());
-    let mut cut_start = CUT_START.lock().unwrap_or_else(|e| e.into_inner());
-    if !cutscene {
-        *cut_start = None;
-        if !hidden.is_empty() {
-            let list = std::mem::take(&mut *hidden);
-            player_model_characters(|_, c| {
-                if list.contains(&handle_u64(&c.field_ins_handle)) {
-                    c.chr_flags1c5.set_enable_render(true);
-                }
-            });
-        }
-        let mut last = LAST_SCAN.lock().unwrap_or_else(|e| e.into_inner());
-        if last.is_none_or(|t| t.elapsed().as_secs_f32() > 0.25) {
-            *last = Some(Instant::now());
-            let mut now_here = Vec::new();
-            player_model_characters(|_, c| now_here.push(handle_u64(&c.field_ins_handle)));
-            seen.retain(|(h, _)| now_here.contains(h));
-            for h in now_here {
-                if !seen.iter().any(|(k, _)| *k == h) {
-                    seen.push((h, Instant::now()));
-                }
-            }
-        }
-        return;
-    }
-    let start = *cut_start.get_or_insert_with(Instant::now);
-    // there well before the cutscene: a real character; new with it: the cutscene's copy
-    let settled = start.checked_sub(Duration::from_secs(1));
-    player_model_characters(|list, c| {
-        let h = handle_u64(&c.field_ins_handle);
-        let old = seen.iter().any(|(k, t)| *k == h && settled.is_some_and(|s| *t < s));
-        if Some(h) == main || old {
-            return;
-        }
-        if !hidden.contains(&h) {
-            hidden.push(h);
-            log(format!("cutscene: hiding its copy of the Tarnished ({list} list, type {:?})", c.chr_type));
-        }
-        c.chr_flags1c5.set_enable_render(false);
-    });
-}
 
 /// Set by input_task when the player pressed interact; frame() then watches for an event animation.
 static INTERACT_PRESSED: AtomicBool = AtomicBool::new(false);
