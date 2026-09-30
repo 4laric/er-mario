@@ -88,6 +88,8 @@ pub struct HavokCollision {
     bodies: usize,
     body_count: usize,
     logged_layers: bool,
+    /// bodies skipped for not being in the physics world (diagnostics)
+    pub not_in_world: u32,
     queries: u32,
 }
 
@@ -275,6 +277,35 @@ fn bodies_near(center: Vec3, range: f32) -> Vec<String> {
     out
 }
 
+/// Debug: the raw words (+0x40..+0xb0) of every body on `layer` (low byte) whose AABB is within
+/// `range` m of `center`, to compare a live body with one the game switched off.
+pub fn dump_layer_near(center: Vec3, range: f32, layer: u32) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(havok) = unsafe { CSHavokMan::instance() }.ok() else { return out };
+    let base = havok as *const CSHavokMan as usize;
+    let Some(world) = read_u64(base + 0x98).and_then(|pw| read_u64(pw as usize + 0x8)) else { return out };
+    let world = world as usize;
+    let Some(bodies) = read_u64(world + 0x28) else { return out };
+    let bodies = bodies as usize;
+    let count = (u32_at(world + 0x30) as usize).min(262_144);
+    if !readable(bodies, count * 0xb0) {
+        return out;
+    }
+    for i in 0..count {
+        let body = bodies + i * 0xb0;
+        if u32_at(body + 0x6c) & 0xff != layer || unsafe { *((body + 0x60) as *const usize) } == 0 {
+            continue;
+        }
+        let p = vec3_at(body + 0x30);
+        if (p - center).length() > range {
+            continue;
+        }
+        let words: Vec<String> = (0x40..0xb0).step_by(4).map(|o| format!("{:08x}", u32_at(body + o))).collect();
+        out.push(format!("  raw body #{i} L{layer:x} at {p:.2?}: {}", words.join(" ")));
+    }
+    out
+}
+
 /// Breakable things near `center`: (body index, origin, layer). Physics props (layer 0x1e: loose
 /// barrels, pots) have their origin at the centre of mass; map assets (0x3a: crates and barrels
 /// in dungeons, also lifts and gates, which just shrug a hit off) at their base.
@@ -446,6 +477,12 @@ impl HavokCollision {
             // skip layers we don't want before touching the shape
             if !self.layers.is_empty() && !self.layers.contains(&(layer & 0xff)) {
                 *seen_layers.entry(layer).or_default() += 1;
+                continue;
+            }
+            // taken out of the physics world (+0x78 broadphase id -1): an opened door's blocker,
+            // a broken crate... the body stays in the list but nothing collides with it
+            if u32_at(body + 0x78) == u32::MAX {
+                self.not_in_world += 1;
                 continue;
             }
             n_layer_ok += 1;

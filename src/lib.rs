@@ -502,7 +502,7 @@ fn havok_surfaces(h: &mut havok_col::HavokCollision, origin: [f32; 3], mario: [f
     }
     static ORACLE_LOGS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     if ORACLE_LOGS.fetch_add(1, Ordering::Relaxed) % 20 == 0 {
-        log(format!("game raycast check: kept {} of {before} triangles", tris.len()));
+        log(format!("game raycast check: kept {} of {before} triangles ({} bodies skipped so far: not in the physics world)", tris.len(), h.not_in_world));
         let rows: Vec<String> = per_body.iter().map(|(b, (l, n, k))| format!("#{b}(L{l:x}) {k}/{n}")).collect();
         log(format!("  per body confirmed/picked: {}", rows.join(", ")));
     }
@@ -2006,6 +2006,11 @@ fn frame(data: &FD4TaskData) {
             }
             for line in m.havok.probe(p) {
                 log(line);
+            }
+            for layer in [0x3a, 0x39] {
+                for line in havok_col::dump_layer_near(p, 6.0, layer).into_iter().take(12) {
+                    log(line);
+                }
             }
             // SM64's own view: loaded wall-ish triangles near Mario (within 120 units, Mario's height band)
             let [mx, my, mz] = m.state.position;
