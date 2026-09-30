@@ -688,12 +688,28 @@ fn pose_task_late() {
             p.chr_ins.opacity_keyframes_multiplier_previous = 0.0;
         }
     }
+    // in a cutscene the player isn't rendered at all (opacity is the cutscene's): written in every
+    // task group up to Draw_Pre, so the cutscene can't turn it back on in between; switched back
+    // on once when it ends
+    {
+        static WAS_HIDDEN: AtomicBool = AtomicBool::new(false);
+        let hide = CUTSCENE_HIDE.load(Ordering::Relaxed) && ENABLED.load(Ordering::Relaxed);
+        let was = WAS_HIDDEN.swap(hide, Ordering::Relaxed);
+        if hide || was {
+            if let Some(p) = (unsafe { WorldChrMan::instance_mut() }).ok().and_then(|w| w.main_player.as_mut()) {
+                p.chr_ins.chr_flags1c5.set_enable_render(!hide);
+            }
+        }
+    }
     if !ENABLED.load(Ordering::Relaxed) {
         return;
     }
     let Some(player) = (unsafe { WorldChrMan::instance() }).ok().and_then(|w| w.main_player.as_ref()) else { return };
     engine_mario::apply(&player.chr_ins as *const _ as usize, "LocationUpdate_PrePhysics");
 }
+
+/// A cutscene is playing: the player isn't rendered (pose_task_late).
+static CUTSCENE_HIDE: AtomicBool = AtomicBool::new(false);
 
 /// Set by input_task when the player pressed interact; frame() then watches for an event animation.
 static INTERACT_PRESSED: AtomicBool = AtomicBool::new(false);
@@ -1850,6 +1866,7 @@ fn frame(data: &FD4TaskData) {
             log(format!("cutscene: {}", if cutscene { "player hidden" } else { "over, player shown" }));
         }
     }
+    CUTSCENE_HIDE.store(cutscene, Ordering::Relaxed);
     set_opacity(if cutscene { 0.0 } else { 1.0 });
 
     // event animations (fog walls, doors, ladders...): after an interact, if the Tarnished starts a
