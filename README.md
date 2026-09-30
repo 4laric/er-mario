@@ -23,9 +23,7 @@ You need Elden Ring on Steam and a Super Mario 64 ROM (US version).
 
 That's it, you're Mario. Start a new character, the mod uses its own save file.
 
-**Controls:** left stick moves, A jumps, X or B punches and kicks, LB crouches and ground
-pounds, Y is Elden Ring's interact. On keyboard: WASD, L to jump, comma to punch, K to crouch,
-E to interact.
+Only tested with an Xbox One controller and with keyboard and mouse.
 
 **Stay offline.** me3 starts the game offline with anti-cheat off. Never play this mod online.
 
