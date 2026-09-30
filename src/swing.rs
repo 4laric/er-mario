@@ -95,10 +95,12 @@ struct State {
     /// Mario's face angle last tick (the swing's speed)
     last_face: Option<f32>,
     spin: f32,
+    /// the downed boss's last position and how long he's lain still
+    rest: (Vec3, f32),
 }
 
 static STATE: Mutex<State> =
-    Mutex::new(State { phase: Phase::Idle, open: Vec::new(), toughness: Vec::new(), meter: Vec::new(), last_face: None, spin: 0.0 });
+    Mutex::new(State { phase: Phase::Idle, open: Vec::new(), toughness: Vec::new(), meter: Vec::new(), last_face: None, spin: 0.0, rest: (Vec3::ZERO, 0.0) });
 /// the stagger cue to play (SM64 thread)
 static CUE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -231,12 +233,18 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                 st.phase = Phase::Idle;
                 return None;
             };
-            // lying limp, then blending back into his own animation
+            // he gets back up only once he's lying still (switching a ragdoll off while it still
+            // tumbles crashed the game): barely moving for half a second, at least DOWN_FOR after
+            // landing, and after 8 s once he's merely slow
+            let p = chr.modules.physics.position;
+            let now = Vec3::new(p.0, p.1, p.2);
+            let v = (now - st.rest.0).length() / dt.max(1e-3);
+            st.rest = (now, if v < 0.5 { st.rest.1 + dt } else { 0.0 });
             let left = until.saturating_duration_since(Instant::now()).as_secs_f32();
-            if left > GET_UP {
+            let waited = DOWN_FOR + GET_UP - left;
+            let at_rest = st.rest.1 > 0.5 || (waited > 8.0 && v < 3.0);
+            if left > 0.0 || !at_rest {
                 set_ragdoll(chr, RAGDOLL_FULL);
-            } else if left > 0.0 {
-                set_ragdoll(chr, (RAGDOLL_FULL * left / GET_UP).max(0.01));
             } else {
                 set_ragdoll(chr, 0.0);
                 log("swing: boss back on his feet");
@@ -252,22 +260,26 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
             let p = chr.modules.physics.position;
             let now = Vec3::new(p.0, p.1, p.2);
             let v = (now - last).length() / dt.max(1e-3);
-            if frames < 10 {
-                log(format!("swing: limp frame {frames}: speed {v:.1} m/s at {now:.2?}"));
+            if frames < 6 {
+                log(format!("swing: limp frame {frames}: speed {v:.1} m/s"));
             }
-            let peak = peak.max(v);
+            // (the first frames jump as the character snaps to the ragdoll's hips: not speed)
+            let settle = frames < 3;
+            // `peak` is his smoothed speed here
+            let speed = if settle { peak } else { peak * 0.6 + v * 0.4 };
             let still = if v < 1.0 { still + dt } else { 0.0 };
             let age = since.elapsed().as_secs_f32();
-            // the impact: his flight stops short, he runs into the map, or he's come to rest
-            let stopped = age > 0.15 && v < peak * 0.3;
-            let into_map = age > 0.05 && hit(last + Vec3::Y * 0.5, now + Vec3::Y * 0.5).is_some();
-            if stopped || into_map || still > 0.3 || age > 3.0 {
-                let pct = IMPACT_MIN + (IMPACT_MAX - IMPACT_MIN) * ((peak - 10.0) / 30.0).clamp(0.0, 1.0);
-                log(format!("swing: limp boss landed (peak {peak:.1} m/s, stopped {stopped}, map {into_map}): {pct:.0}% of his HP"));
+            // the impact: his speed collapses, he runs into the map, or he's come to rest
+            let stopped = !settle && v < speed * 0.35;
+            let into_map = !settle && hit(last + Vec3::Y * 0.5, now + Vec3::Y * 0.5).is_some();
+            if stopped || into_map || still > 0.3 || age > 4.0 {
+                let pct = IMPACT_MIN + (IMPACT_MAX - IMPACT_MIN) * ((speed - 10.0) / 30.0).clamp(0.0, 1.0);
+                log(format!("swing: limp boss landed at {speed:.1} m/s (stopped {stopped}, map {into_map}): {pct:.0}% of his HP"));
                 st.phase = Phase::Down { boss, until: Instant::now() + std::time::Duration::from_secs_f32(DOWN_FOR + GET_UP) };
+                st.rest = (now, 0.0);
                 return Some((boss, pct));
             }
-            st.phase = Phase::Limp { boss, last: now, peak, since, still, frames: frames + 1 };
+            st.phase = Phase::Limp { boss, last: now, peak: speed, since, still, frames: frames + 1 };
             None
         }
         Phase::Held { boss, reach } => {
@@ -333,6 +345,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                         set_ragdoll(chr, RAGDOLL_FULL);
                         log("swing: ragdoll on impact");
                     }
+                    st.rest = (rest, 0.0);
                     st.phase = if chr.chr_ctrl.chr_ragdoll_state != 0 {
                         Phase::Down { boss, until: Instant::now() + std::time::Duration::from_secs_f32(DOWN_FOR + GET_UP) }
                     } else {
