@@ -324,13 +324,24 @@ pub fn props_near(center: Vec3, range: f32) -> Vec<(u32, Vec3, u32)> {
     for i in 0..count {
         let body = bodies + i * 0xb0;
         let layer = u32_at(body + 0x6c) & 0xff;
-        if unsafe { *((body + 0x60) as *const usize) } == 0 || (layer != 0x1e && layer != 0x3a) {
+        let shape = unsafe { *((body + 0x60) as *const usize) };
+        if shape == 0 || !matches!(layer, 0x1e | 0x3a | 0x49 | 0x55) || u32_at(body + 0x78) == u32::MAX {
             continue;
         }
         let p = vec3_at(body + 0x30);
-        if (p - center).length() < range {
-            out.push((i as u32, p, layer));
+        if (p - center).length() >= range {
+            continue;
         }
+        // 0x49 / 0x55: small clutter (pots, jars, stools, debris) are boxes; anything else there
+        // is map collision
+        if matches!(layer, 0x49 | 0x55) && class_of(shape).as_deref() != Some("hknpBoxShape") {
+            continue;
+        }
+        // one target for a cluster of pieces (a hit breaks everything around it anyway)
+        if out.iter().any(|(_, q, _): &(u32, Vec3, u32)| q.distance(p) < 0.6) {
+            continue;
+        }
+        out.push((i as u32, p, layer));
     }
     out
 }

@@ -133,8 +133,10 @@ fn xinput_hook(reg: *mut ilhook::x64::Registers, original: usize) -> usize {
         // buttons reach the game (menus need them; the Tarnished's actions are stripped in
         // input_task); the left stick is Mario's alone outside menus
         let g = &mut s.Gamepad;
-        g.sThumbLX = 0;
-        g.sThumbLY = 0;
+        if !ON_LADDER.load(Ordering::Relaxed) {
+            g.sThumbLX = 0;
+            g.sThumbLY = 0;
+        }
         // with the SM64 camera the right stick is Lakitu's C-buttons, not Elden Ring's camera
         if lakitu::ON.load(Ordering::Relaxed) {
             g.sThumbRX = 0;
@@ -721,6 +723,8 @@ static PENDING_RESTORE: Mutex<Option<(std::time::Instant, equip::Loadout)>> = Mu
 static CREATE_RETRY: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 static RETURN_HOME: AtomicBool = AtomicBool::new(false);
 static FOLLOWING: AtomicBool = AtomicBool::new(false);
+/// The Tarnished is on a ladder: the left stick (and WASD) climb it, so they go to the game.
+static ON_LADDER: AtomicBool = AtomicBool::new(false);
 
 /// Runs right after the game turned the pad into character actions (ChrIns_PreBehaviorSafe):
 /// detects menus (buttons pressed but nothing reaches the character) and strips every action but
@@ -880,7 +884,7 @@ fn frame(data: &FD4TaskData) {
     let pad = if MENU_OPEN.load(Ordering::Relaxed) || FOLLOWING.load(Ordering::Relaxed) { None } else { pad };
     // Mario's keys (WASD etc.) only reach the game in menus or with Mario off
     kbd::CAPTURE.store(
-        ENABLED.load(Ordering::Relaxed) && IN_WORLD.load(Ordering::Relaxed) && !MENU_OPEN.load(Ordering::Relaxed),
+        ENABLED.load(Ordering::Relaxed) && IN_WORLD.load(Ordering::Relaxed) && !MENU_OPEN.load(Ordering::Relaxed) && !ON_LADDER.load(Ordering::Relaxed),
         Ordering::Relaxed,
     );
     let btn = pad.map(|p| p.Gamepad.wButtons).unwrap_or_default();
@@ -1819,6 +1823,15 @@ fn frame(data: &FD4TaskData) {
         if let Some((t, before, last)) = *follow {
             if cur != last {
                 log(format!("follow: anim {last} -> {cur}"));
+                if ladder_anim(cur) {
+                    let o = physics.orientation;
+                    let f = glam::Quat::from_xyzw(o.0, o.1, o.2, o.3).mul_vec3(glam::vec3(0.0, 0.0, -1.0));
+                    log(format!(
+                        "ladder: Tarnished at {:.2?} facing {f:.2?}, Mario face angle {:.2}",
+                        (physics.position.0, physics.position.1, physics.position.2),
+                        m.state.face_angle
+                    ));
+                }
                 *follow = Some((t, before, cur));
             }
             let _ = before;
@@ -1845,6 +1858,7 @@ fn frame(data: &FD4TaskData) {
             }
         }
         FOLLOWING.store(follow.is_some(), Ordering::Relaxed);
+        ON_LADDER.store(follow.is_some() && ladder_anim(cur), Ordering::Relaxed);
         if follow.is_some() {
             let p = physics.position;
             let sm = collision::er_to_sm(m.origin, &p);
