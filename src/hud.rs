@@ -184,8 +184,28 @@ static STARS: AtomicU32 = AtomicU32::new(0);
 /// when the Mario frame last reported (the HUD goes when it stops, e.g. on a loading screen)
 static LAST_SET: Mutex<Option<Instant>> = Mutex::new(None);
 
-pub fn set(wedges: u8, hidden: bool, active: bool) {
-    WEDGES.store(if active && !hidden { wedges } else { 0xFF }, Ordering::Relaxed);
+/// `hidden`: why the HUD should go (None: it stays). A reason must last HIDE_AFTER before the HUD
+/// goes (a one-frame "menu" guess or pause blip made it flicker); death and loading hide at once.
+pub fn set(wedges: u8, hidden: Option<&'static str>, active: bool) {
+    const HIDE_AFTER: f32 = 0.15;
+    static SINCE: Mutex<Option<(Instant, &'static str)>> = Mutex::new(None);
+    static SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+    let mut since = SINCE.lock().unwrap_or_else(|e| e.into_inner());
+    let hide = match hidden {
+        None => {
+            *since = None;
+            false
+        }
+        Some(why) => {
+            let (t, _) = *since.get_or_insert((Instant::now(), why));
+            why == "dead" || why == "loading" || t.elapsed().as_secs_f32() >= HIDE_AFTER
+        }
+    };
+    let show = active && !hide;
+    if SHOWN.swap(show, Ordering::Relaxed) != show {
+        crate::log(format!("hud: {}", if show { "shown".to_string() } else { format!("hidden ({})", hidden.unwrap_or("inactive")) }));
+    }
+    WEDGES.store(if show { wedges } else { 0xFF }, Ordering::Relaxed);
     *LAST_SET.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
 }
 
@@ -318,7 +338,7 @@ impl ImguiRenderLoop for Overlay {
 
         // nothing outside Mario mode, in menus, or when the Mario frame stopped (loading)
         let wedges = WEDGES.load(Ordering::Relaxed);
-        let alive = LAST_SET.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|t| t.elapsed().as_secs_f32() < 0.2);
+        let alive = LAST_SET.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|t| t.elapsed().as_secs_f32() < 0.5);
         if wedges == 0xFF || !alive {
             return;
         }

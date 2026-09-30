@@ -1297,7 +1297,18 @@ fn frame(data: &FD4TaskData) {
     let loading = current_anim(&player_ref.chr_ins) == -1;
     watch::poll();
     let paused = WORLD_PAUSED.load(Ordering::Relaxed);
-    hud::set(wedges.min(8), m.dead || loading || paused || MENU_OPEN.load(Ordering::Relaxed), true);
+    let hide_why = if m.dead {
+        Some("dead")
+    } else if loading {
+        Some("loading")
+    } else if paused {
+        Some("paused")
+    } else if MENU_OPEN.load(Ordering::Relaxed) {
+        Some("menu")
+    } else {
+        None
+    };
+    hud::set(wedges.min(8), hide_why, true);
     // the tail swing: watch the bosses' stance, carry / throw / fly the grabbed one
     swing::watch_stances(&combat::boss_handles());
     {
