@@ -97,6 +97,14 @@ fn hold_at(chr: &mut eldenring::cs::ChrIns, home: Vec3) {
     unsafe { *((&mut **fall as *mut eldenring::cs::CSChrFallModule as *mut u8).add(0x1C)) = 0 };
 }
 
+/// No falling as far as the game is concerned: fall timer and fell-out-of-the-world flag
+/// (CSChrFallModule +0x1C) cleared.
+fn clear_fall(chr: &mut eldenring::cs::ChrIns) {
+    let fall = &mut chr.modules.fall;
+    fall.fall_timer = 0.0;
+    unsafe { *((&mut **fall as *mut eldenring::cs::CSChrFallModule as *mut u8).add(0x1C)) = 0 };
+}
+
 /// Whether Mario has a boss by the tail (the boss can't hurt him then).
 pub fn holding() -> bool {
     matches!(STATE.lock().unwrap_or_else(|e| e.into_inner()).phase, Phase::Held { .. })
@@ -130,6 +138,9 @@ enum Phase {
     Flying { boss: FieldInsHandle, pos: Vec3, vel: Vec3, since: Instant, radius: f32 },
     /// knocked flat after the impact (his ragdoll), until he gets back up
     Down { boss: FieldInsHandle, until: Instant },
+    /// landed without a ragdoll (big bosses): a moment of protection while the game settles him
+    /// (he can stay in his falling animation, and the game's fall death would take him)
+    Settling { boss: FieldInsHandle, until: Instant },
     /// brought back after a throw off the map: held there a moment (the ragdoll lets go, the
     /// game's out-of-the-world check is kept off)
     Returning { boss: FieldInsHandle, until: Instant },
@@ -346,6 +357,25 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
             }
             None
         }
+        Phase::Settling { boss, until } => {
+            let Some(chr) = wcm.chr_ins_by_handle_mut(&boss) else {
+                st.phase = Phase::Idle;
+                return None;
+            };
+            protect(chr, &mut st.guard_hp);
+            clear_fall(chr);
+            // until he's back on the ground (he can hang in his falling animation for a while)
+            let grounded = chr.modules.physics.is_touching_ground;
+            let over = Instant::now() >= until;
+            if (over && grounded) || over && Instant::now() >= until + std::time::Duration::from_secs(8) {
+                if !grounded {
+                    log("swing: boss still not on the ground 10 s after landing, protection ends");
+                }
+                st.phase = Phase::Idle;
+                st.guard_hp = 0;
+            }
+            None
+        }
         Phase::Returning { boss, until } => {
             let Some(chr) = wcm.chr_ins_by_handle_mut(&boss) else {
                 st.phase = Phase::Idle;
@@ -406,6 +436,8 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                 st.phase = Phase::Idle;
                 return None;
             };
+            // (held off the ground: the game would count it as falling)
+            clear_fall(chr);
             let holding = action == ACT_PICKING_UP_BOWSER || action == ACT_HOLDING_BOWSER;
             let released = action == ACT_RELEASING_BOWSER;
             let ph = &mut chr.modules.physics;
@@ -472,7 +504,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                     st.phase = if chr.chr_ctrl.chr_ragdoll_state != 0 {
                         Phase::Down { boss, until: Instant::now() + std::time::Duration::from_secs_f32(DOWN_FOR + GET_UP) }
                     } else {
-                        Phase::Idle
+                        Phase::Settling { boss, until: Instant::now() + std::time::Duration::from_secs(2) }
                     };
                     let pct = IMPACT_MIN + (IMPACT_MAX - IMPACT_MIN) * ((speed - 10.0) / 30.0).clamp(0.0, 1.0);
                     log(format!("swing: boss hit something at {speed:.1} m/s: {pct:.0}% of his HP"));
@@ -513,7 +545,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
 pub fn reset() {
     let mut st = STATE.lock().unwrap_or_else(|e| e.into_inner());
     let boss = match st.phase {
-        Phase::Held { boss, .. } | Phase::Flying { boss, .. } | Phase::Down { boss, .. } | Phase::Limp { boss, .. } | Phase::Returning { boss, .. } => Some(boss),
+        Phase::Held { boss, .. } | Phase::Flying { boss, .. } | Phase::Down { boss, .. } | Phase::Limp { boss, .. } | Phase::Returning { boss, .. } | Phase::Settling { boss, .. } => Some(boss),
         Phase::Idle => None,
     };
     if let (Some(boss), Ok(wcm)) = (boss, unsafe { WorldChrMan::instance_mut() }) {
