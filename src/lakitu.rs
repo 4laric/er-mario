@@ -354,7 +354,7 @@ pub fn update(
         static LOGGED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         if LOGGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 20 == 0 {
             let h0 = hit(head, cam.focus + flat + Vec3::Y * height);
-            crate::log(format!(
+            crate::dlog(format!(
                 "lakitu: view blocked (clear at {clear:?}), mario {mario:.2?}, focus {:.2?}, cam {:.2?}, hit {h0:.2?} ({:.2} m from focus)",
                 cam.focus,
                 cam.focus + flat + Vec3::Y * height,

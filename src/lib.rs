@@ -72,6 +72,13 @@ static MENU_OPEN: AtomicBool = AtomicBool::new(false);
 static PAD: Mutex<Option<(XINPUT_STATE, std::time::Instant)>> = Mutex::new(None);
 
 /// er_mario.log in the mod folder, started fresh every launch.
+/// A diagnostic line: only in the log with `debug = 1` (players' logs stay short).
+pub(crate) fn dlog(msg: impl AsRef<str>) {
+    if debug() {
+        log(msg);
+    }
+}
+
 pub(crate) fn log(msg: impl AsRef<str>) {
     static FRESH: std::sync::Once = std::sync::Once::new();
     let path = paths::file("er_mario.log");
@@ -306,7 +313,7 @@ fn world_paused(player: &PlayerIns) -> bool {
                     let q = chr.modules.physics.position;
                     let d = ((q.0 - p.0).powi(2) + (q.2 - p.2).powi(2)).sqrt();
                     if chr.character_id == mine && d < 60.0 {
-                        log(format!(
+                        crate::dlog(format!(
                             "pause: player-model character {:?} at {d:.1} m, main {}",
                             chr.chr_type,
                             handle_key_of(&chr.field_ins_handle) == main
@@ -492,7 +499,7 @@ fn havok_surfaces(h: &mut havok_col::HavokCollision, origin: [f32; 3], mario: [f
                     break;
                 }
             }
-            log(format!("height check (real surface minus decoded, m): {}", rows.join(", ")));
+            crate::dlog(format!("height check (real surface minus decoded, m): {}", rows.join(", ")));
         }
     }
     let mut per_body: std::collections::BTreeMap<u32, (u32, u32, u32)> = Default::default();
@@ -516,9 +523,9 @@ fn havok_surfaces(h: &mut havok_col::HavokCollision, origin: [f32; 3], mario: [f
     }
     static ORACLE_LOGS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     if ORACLE_LOGS.fetch_add(1, Ordering::Relaxed) % 20 == 0 {
-        log(format!("game raycast check: kept {} of {before} triangles ({} bodies skipped so far: not in the physics world)", tris.len(), h.not_in_world));
+        crate::dlog(format!("game raycast check: kept {} of {before} triangles ({} bodies skipped so far: not in the physics world)", tris.len(), h.not_in_world));
         let rows: Vec<String> = per_body.iter().map(|(b, (l, n, k))| format!("#{b}(L{l:x}) {k}/{n}")).collect();
-        log(format!("  per body confirmed/picked: {}", rows.join(", ")));
+        crate::dlog(format!("  per body confirmed/picked: {}", rows.join(", ")));
     }
     if tris.is_empty() {
         return None;
@@ -541,7 +548,7 @@ fn havok_surfaces(h: &mut havok_col::HavokCollision, origin: [f32; 3], mario: [f
                 }
             }
         }
-        log(format!("winding check: ground under Mario with Havok winding: {up} facing up, {down} facing down"));
+        crate::dlog(format!("winding check: ground under Mario with Havok winding: {up} facing up, {down} facing down"));
         if let Ok(h) = unsafe { eldenring::cs::CSHavokMan::instance() } {
             log(format!("CSHavokMan at {:#x}", h as *const _ as usize));
         }
@@ -1022,7 +1029,7 @@ fn frame(data: &FD4TaskData) {
             log(format!("resting at a grace (anim {a}): health refilled"));
         }
         if last != a && debug() {
-            log(format!("tarnished anim -> {a}"));
+            crate::dlog(format!("tarnished anim -> {a}"));
         }
     }
     static FALL_OVERRIDDEN: AtomicBool = AtomicBool::new(false);

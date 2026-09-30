@@ -27,6 +27,13 @@ Only tested with an Xbox One controller and with keyboard and mouse.
 
 **Stay offline.** me3 starts the game offline with anti-cheat off. Never play this mod online.
 
+## Known issues
+
+- Cutscenes show a crumpled Mario with the Tarnished's head.
+- Mario's walk can flicker a little while passing fog walls.
+- Torrent can't be summoned in Mario mode.
+- Some big bosses' ragdolls go wild after a throw; the mod stops them early.
+
 ## How it works
 
 - A Rust DLL loaded by [me3](https://me3.help), offline only (Easy Anti-Cheat off, separate save).

@@ -598,7 +598,7 @@ impl HavokCollision {
                 _ => {
                     n_decoded += 1;
                     if self.queries == 0 {
-                        log(format!("  decoding body {i} layer {layer:#x} shape {shape:#x} md {md:#x} class {:?}", class_of(shape)));
+                        crate::dlog(format!("  decoding body {i} layer {layer:#x} shape {shape:#x} md {md:#x} class {:?}", class_of(shape)));
                     }
                     let cls = class_of(shape).unwrap_or_default();
                     if cls.contains("ConvexPolytopeShape") || cls.contains("BoxShape") || cls.contains("CylinderShape") {
@@ -681,7 +681,7 @@ impl HavokCollision {
         self.last_bodies = out.iter().map(|t| t.2).collect();
         self.queries += 1;
         if self.queries % 10 == 1 {
-            log(format!(
+            crate::dlog(format!(
                 "havok query: {:.1} ms, bodies {count}, layer ok {n_layer_ok}, decoded {n_decoded}, near {n_near}, picked {n_picked}, out {}",
                 t_start.elapsed().as_secs_f32() * 1000.0, out.len()
             ));

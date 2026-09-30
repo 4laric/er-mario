@@ -52,8 +52,9 @@ fn runaway(chr: &mut eldenring::cs::ChrIns, v: f32) {
 }
 const GET_UP: f32 = 1.0;
 
+/// Thrown bosses go limp: on unless `boss_ragdoll = off` in er_mario.ini.
 fn ragdoll_on() -> bool {
-    crate::paths::config("boss_ragdoll").is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "on" | "1" | "true" | "yes"))
+    !crate::paths::config("boss_ragdoll").is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "off" | "0" | "false" | "no"))
 }
 
 /// Ragdoll amount 0..1 (0 = back to normal animation). The game's ragdoll states (ChrCtrl +0x128,
@@ -270,7 +271,7 @@ pub fn watch_stances(bosses: &[FieldInsHandle]) {
             match last.iter_mut().find(|(kk, _)| *kk == k) {
                 Some(e) if e.1 == anim => {}
                 Some(e) => {
-                    log(format!("boss anim: c{:04} {} -> {anim}", chr.character_id, e.1));
+                    crate::dlog(format!("boss anim: c{:04} {} -> {anim}", chr.character_id, e.1));
                     e.1 = anim;
                 }
                 None => last.push((k, anim)),
@@ -424,7 +425,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
             let now = Vec3::new(p.0, p.1, p.2);
             let v = (now - last).length() / dt.max(1e-3);
             if frames < 6 {
-                log(format!("swing: limp frame {frames}: speed {v:.1} m/s"));
+                crate::dlog(format!("swing: limp frame {frames}: speed {v:.1} m/s"));
             }
             // (the first frames jump as the character snaps to the ragdoll's hips: not speed)
             let settle = frames < 3;
