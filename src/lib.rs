@@ -221,10 +221,13 @@ fn hud_task() {
     let Ok(fe) = (unsafe { eldenring::cs::CSFeManImp::instance_mut() }) else { return };
     use eldenring::cs::CSFeManHudState as Hud;
     let mario = ENABLED.load(Ordering::Relaxed) && IN_WORLD.load(Ordering::Relaxed);
+    // PopupMenu, not HideAll: it hides the HP / FP / stamina bars too but keeps NPC subtitles
+    // (HideAll took them along)
+    let hidden = Hud::PopupMenu;
     if mario {
         // Elden Ring's own bars are hidden (the enemies' health bars are the overlay's, hud.rs)
-        if matches!(fe.hud_state, Hud::Default) {
-            fe.hud_state = Hud::HideAll;
+        if matches!(fe.hud_state, Hud::Default) || (HIDDEN.load(Ordering::Relaxed) && fe.hud_state != hidden && !matches!(fe.hud_state, Hud::Default) && !gameover::showing() && !game_menu_open()) {
+            fe.hud_state = hidden;
             HIDDEN.store(true, Ordering::Relaxed);
         }
         if gameover::showing() {
@@ -232,7 +235,7 @@ fn hud_task() {
             fe.frontend_values.enable_equip_hud = false;
             HIDDEN.store(true, Ordering::Relaxed);
         }
-    } else if HIDDEN.swap(false, Ordering::Relaxed) && matches!(fe.hud_state, Hud::HideAll) {
+    } else if HIDDEN.swap(false, Ordering::Relaxed) && fe.hud_state == hidden {
         fe.hud_state = Hud::Default;
     }
 }
