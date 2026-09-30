@@ -1,6 +1,7 @@
 //! Picking enemies up like SM64's Bob-ombs: Mario's punch from behind lifts a regular (not boss,
 //! not too big) enemy, he carries it between his hands (SM64's own carrying: walk, jump), and B
-//! throws it; whatever it hits first hurts it badly.
+//! throws it: a moment into the flight it goes limp (the game's death ragdoll) and whatever it
+//! hits first kills it.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,14 +26,18 @@ const MAX_HEIGHT: f32 = 2.4;
 const THROW_SPEED: f32 = 14.0;
 const THROW_UP: f32 = 5.0;
 const GRAVITY: f32 = 16.0;
-/// Impact damage: share of the enemy's max HP
-pub const IMPACT_PCT: f32 = 60.0;
+/// Impact damage: all of it (the finishing blow is the game's, see combat::impact)
+pub const IMPACT_PCT: f32 = 100.0;
+/// Guided flight before it goes limp (the ragdoll's bodies take over the speed it has then)
+const LIMP_AFTER: f32 = 0.1;
 
 enum Phase {
     Idle,
     /// Mario lifts / carries it: (enemy, its height in m)
     Held { mob: FieldInsHandle, height: f32, since: Instant },
     Flying { mob: FieldInsHandle, pos: Vec3, vel: Vec3, since: Instant, radius: f32 },
+    /// flying limp (the ragdoll carries it): smoothed speed, frames since going limp
+    Limp { mob: FieldInsHandle, last: Vec3, speed: f32, since: Instant, frames: u32 },
 }
 
 static PHASE: Mutex<Phase> = Mutex::new(Phase::Idle);
@@ -91,7 +96,7 @@ pub fn holding() -> bool {
 /// Whether this enemy is in Mario's hands or flying (no normal hits on it).
 pub fn is_carried(h: &FieldInsHandle) -> bool {
     match &*PHASE.lock().unwrap_or_else(|e| e.into_inner()) {
-        Phase::Held { mob, .. } | Phase::Flying { mob, .. } => key(mob) == key(h),
+        Phase::Held { mob, .. } | Phase::Flying { mob, .. } | Phase::Limp { mob, .. } => key(mob) == key(h),
         Phase::Idle => false,
     }
 }
@@ -190,6 +195,15 @@ pub fn update(
                     *phase = Phase::Idle;
                     None
                 }
+                // a few frames of guided flight gave its ragdoll's bodies the throw's speed: limp
+                // from here (the game's death ragdoll: it's done for anyway)
+                _ if chr.chr_ctrl.ragdoll_ins != 0 && since.elapsed().as_secs_f32() > LIMP_AFTER => {
+                    chr.chr_ctrl.chr_ragdoll_state = 2;
+                    chr.modules.physics.gravity_disabled = false;
+                    log(format!("carry: limp at {:.1} m/s", vel.length()));
+                    *phase = Phase::Limp { mob, last: pos, speed: vel.length(), since: Instant::now(), frames: 0 };
+                    None
+                }
                 _ => {
                     ph.position = HavokPosition(next.x, next.y, next.z, 0.0);
                     ph.chr_proxy_pos_update_requested = true;
@@ -198,6 +212,28 @@ pub fn update(
                     None
                 }
             }
+        }
+        Phase::Limp { mob, last, speed, since, frames } => {
+            let Some(chr) = wcm.chr_ins_by_handle_mut(&mob) else {
+                *phase = Phase::Idle;
+                return None;
+            };
+            let p = chr.modules.physics.position;
+            let now = Vec3::new(p.0, p.1, p.2);
+            let v = (now - last).length() / dt.max(1e-3);
+            // (the first frames jump as it snaps to the ragdoll's hips: not speed)
+            let settle = frames < 3;
+            let smooth = if settle { speed } else { speed * 0.6 + v * 0.4 };
+            let stopped = !settle && v < smooth * 0.35;
+            let into_map = !settle && hit(last + Vec3::Y * 0.5, now + Vec3::Y * 0.5).is_some();
+            let age = since.elapsed().as_secs_f32();
+            if stopped || into_map || age > 3.0 {
+                log(format!("carry: limp enemy hit something at {smooth:.1} m/s (stopped {stopped}, map {into_map}): dead"));
+                *phase = Phase::Idle;
+                return Some((mob, IMPACT_PCT));
+            }
+            *phase = Phase::Limp { mob, last: now, speed: smooth, since, frames: frames + 1 };
+            None
         }
     }
 }

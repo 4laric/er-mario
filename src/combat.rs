@@ -380,7 +380,8 @@ pub fn impact(combat: &mut Combat, handle: &FieldInsHandle, pct: f32, tick: u32)
     let data = &mut chr.modules.data;
     let (hp, max) = (data.hp, data.max_hp.max(1));
     let dmg = ((max as f32 * pct / 100.0).ceil() as i32).max(1);
-    data.hp = (hp - dmg).max(1);
+    // (a lethal impact, like a thrown enemy's, kills right there)
+    data.hp = if pct >= 100.0 { 0 } else { (hp - dmg).max(1) };
     show_damage(handle, hp, hp - data.hp, true);
     if data.hp == 1 {
         combat.finishing.entry(handle_key(handle)).or_insert((*handle, tick));
