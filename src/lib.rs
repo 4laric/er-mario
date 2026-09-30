@@ -1841,8 +1841,9 @@ fn frame(data: &FD4TaskData) {
     // debug Mario (F11): hide the Tarnished and draw Mario with the debug renderer instead
     // In a cutscene the game poses the character itself after Mario's pose is written (Mario
     // crumples and the Tarnished's face shows): the player is hidden then. A cutscene = the world
-    // paused with no menu or prompt up (tutorials and prompts always have one).
-    let cutscene = WORLD_PAUSED.load(Ordering::Relaxed) && !m.dead && !MENU_OPEN.load(Ordering::Relaxed) && !game_menu_open();
+    // paused with no menu or prompt up, by the game's own signal (our "menu" guess from ignored
+    // button presses fires in cutscenes too, they ignore input the same way).
+    let cutscene = WORLD_PAUSED.load(Ordering::Relaxed) && !m.dead && !game_menu_open();
     {
         static IN_CUTSCENE: AtomicBool = AtomicBool::new(false);
         if IN_CUTSCENE.swap(cutscene, Ordering::Relaxed) != cutscene {
