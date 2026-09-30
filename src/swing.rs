@@ -65,9 +65,14 @@ fn protect(chr: &mut eldenring::cs::ChrIns, guard: &mut i32) {
 
 /// Thrown off the map (far below where he was thrown from, or falling for long): back where
 /// Mario threw him from, standing, like Bowser jumping back onto his platform.
+/// Thrown off the map: far below where he was thrown from, or falling nonstop for a long time.
 fn off_the_map(chr: &eldenring::cs::ChrIns, home: Vec3, falling_for: f32) -> bool {
     let y = chr.modules.physics.position.1;
-    y < home.y - 15.0 || falling_for > 3.0
+    let gone = y < home.y - 25.0 || falling_for > 5.0;
+    if gone {
+        log(format!("swing: off the map at {:.1} m below the throw, falling for {falling_for:.1} s", home.y - y));
+    }
+    gone
 }
 
 fn bring_back(chr: &mut eldenring::cs::ChrIns, home: Vec3) {
@@ -131,6 +136,8 @@ enum Phase {
 
 struct State {
     phase: Phase,
+    /// how long the thrown boss has been falling without a break (s)
+    falling: f32,
     /// bosses whose stance just broke: (handle, until)
     open: Vec<(FieldInsHandle, Instant)>,
     /// per boss: poise last frame (a break shows as a drop to zero or a reset to full)
@@ -150,7 +157,7 @@ struct State {
 }
 
 static STATE: Mutex<State> =
-    Mutex::new(State { phase: Phase::Idle, open: Vec::new(), toughness: Vec::new(), meter: Vec::new(), last_face: None, spin: 0.0, rest: (Vec3::ZERO, 0.0), guard_hp: 0, home: Vec3::ZERO });
+    Mutex::new(State { phase: Phase::Idle, falling: 0.0, open: Vec::new(), toughness: Vec::new(), meter: Vec::new(), last_face: None, spin: 0.0, rest: (Vec3::ZERO, 0.0), guard_hp: 0, home: Vec3::ZERO });
 /// the stagger cue to play (SM64 thread)
 static CUE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -340,7 +347,9 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
             let speed = if settle { peak } else { peak * 0.6 + v * 0.4 };
             let still = if v < 1.0 { still + dt } else { 0.0 };
             let age = since.elapsed().as_secs_f32();
-            if off_the_map(chr, st.home, if now.y < last.y { age } else { 0.0 }) {
+            // falling nonstop (a frame of real drop, not the ragdoll's jitter)
+            st.falling = if now.y < last.y - 0.01 { st.falling + dt } else { 0.0 };
+            if off_the_map(chr, st.home, st.falling) {
                 bring_back(chr, st.home);
                 st.phase = Phase::Returning { boss, until: Instant::now() + std::time::Duration::from_secs(2) };
                 st.guard_hp = 0;
@@ -452,6 +461,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                     set_ragdoll(chr, RAGDOLL_FULL);
                     chr.modules.physics.gravity_disabled = false;
                     log(format!("swing: limp flight at {speed:.1} m/s"));
+                    st.falling = 0.0;
                     st.phase = Phase::Limp { boss, last: pos, peak: speed, since: Instant::now(), still: 0.0, frames: 0 };
                     None
                 }
