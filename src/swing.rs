@@ -26,6 +26,9 @@ const OPEN_FOR: f32 = 3.0;
 /// (its death ragdoll, never used here). Amount 1 = all ragdoll.
 const RAGDOLL_FULL: f32 = 0.99;
 const DOWN_FOR: f32 = 2.0;
+/// Widest boss (m) that goes ragdoll when thrown. Bigger ones (mounted bosses, giants) hung the
+/// game in the death ragdoll: they fly and land without it.
+const RAGDOLL_MAX_RADIUS: f32 = 1.0;
 const GET_UP: f32 = 1.0;
 
 fn ragdoll_on() -> bool {
@@ -433,7 +436,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                     // (experiment, boss_ragdoll = on) he collapses where he hit: the game's
                     // blendable ragdoll (state 4), not its death ragdoll (state 2). Not in the air:
                     // the ragdoll's bodies don't get his flight's speed and would stretch him
-                    if ragdoll_on() && chr.chr_ctrl.ragdoll_ins != 0 {
+                    if ragdoll_on() && radius <= RAGDOLL_MAX_RADIUS && chr.chr_ctrl.ragdoll_ins != 0 {
                         set_ragdoll(chr, RAGDOLL_FULL);
                         log("swing: ragdoll on impact");
                     }
@@ -455,7 +458,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                     st.guard_hp = 0;
                     Some((boss, IMPACT_MAX))
                 }
-                _ if ragdoll_on() && chr.chr_ctrl.ragdoll_ins != 0 && since.elapsed().as_secs_f32() > 0.1 => {
+                _ if ragdoll_on() && radius <= RAGDOLL_MAX_RADIUS && chr.chr_ctrl.ragdoll_ins != 0 && since.elapsed().as_secs_f32() > 0.1 => {
                     // a few frames of guided flight gave his ragdoll's bodies the throw's speed:
                     // limp from here, the physics flies him (gravity, collision)
                     set_ragdoll(chr, RAGDOLL_FULL);
