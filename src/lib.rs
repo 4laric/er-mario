@@ -691,6 +691,20 @@ fn pose_task_late() {
 
 /// Set by input_task when the player pressed interact; frame() then watches for an event animation.
 static INTERACT_PRESSED: AtomicBool = AtomicBool::new(false);
+/// Elden Ring's ladder animations (getting on, climbing, sliding, getting off).
+fn ladder_anim(anim: i32) -> bool {
+    (28000..29000).contains(&anim) || (51100..51200).contains(&anim)
+}
+
+/// A game-driven animation Mario follows: events (6xxxx: fog walls, doors, levers) and ladders.
+fn game_driven(anim: i32) -> bool {
+    (60000..70000).contains(&anim) || ladder_anim(anim)
+}
+
+/// SM64 action for climbing an Elden Ring ladder (libsm64 patch: the pole climb, moved by the game).
+const ACT_ER_LADDER: u32 = 0x0000035F;
+const ACT_FREEFALL: u32 = 0x0100088C;
+
 /// Mario is following the Tarnished through a game-driven animation (fog wall, door, ladder...).
 /// The Tarnished's last animation outside the event range (what he returns to after one).
 static LAST_FREE_ANIM: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
@@ -1784,10 +1798,10 @@ fn frame(data: &FD4TaskData) {
             *armed = Some((std::time::Instant::now(), cur));
         }
         // any event animation (6xxxx: fog walls, doors, levers...) is game-driven
-        if follow.is_none() && armed.is_none() && (60000..70000).contains(&cur) {
+        if follow.is_none() && armed.is_none() && game_driven(cur) {
             *armed = Some((std::time::Instant::now(), LAST_FREE_ANIM.load(Ordering::Relaxed)));
         }
-        if !(60000..70000).contains(&cur) && follow.is_none() {
+        if !game_driven(cur) && follow.is_none() {
             LAST_FREE_ANIM.store(cur, Ordering::Relaxed);
         }
         if let Some((t, before)) = *armed {
@@ -1808,8 +1822,19 @@ fn frame(data: &FD4TaskData) {
                 *follow = Some((t, before, cur));
             }
             let _ = before;
-            if !(60000..70000).contains(&cur) || t.elapsed().as_secs_f32() > 15.0 {
+            // (a long ladder takes a while)
+            let limit = if ladder_anim(last) { 60.0 } else { 15.0 };
+            if !game_driven(cur) || t.elapsed().as_secs_f32() > limit {
                 log("follow: done");
+                // off the ladder: SM64 takes over, dropping him onto the floor he's on
+                if m.state.action == ACT_ER_LADDER {
+                    let id = m.id;
+                    worker::call("ladder off", move |_| unsafe {
+                        sm64::sm64_er_set_ladder(0.0);
+                        sm64::sm64_set_mario_action(id, ACT_FREEFALL);
+                    });
+                    m.state.action = ACT_FREEFALL;
+                }
                 let trace = std::mem::take(&mut *FOLLOW_TRACE.lock().unwrap_or_else(|e| e.into_inner()));
                 log(format!("follow: SM64 action/anim per tick: {}", trace.join(" ")));
                 *follow = None;
@@ -1831,10 +1856,11 @@ fn frame(data: &FD4TaskData) {
                 acc: f32,
                 speed: f32,
                 still: f32,
+                climb: f32,
             }
             static WALK: Mutex<Option<Walk>> = Mutex::new(None);
             let mut walk = WALK.lock().unwrap_or_else(|e| e.into_inner());
-            let w = walk.get_or_insert(Walk { pos: [p.0, p.1, p.2], acc: 0.0, speed: 0.0, still: 1.0 });
+            let w = walk.get_or_insert(Walk { pos: [p.0, p.1, p.2], acc: 0.0, speed: 0.0, still: 1.0, climb: 0.0 });
             w.acc += data.delta_time.time.max(1e-3);
             let tick = w.acc >= 1.0 / 30.0;
             if tick {
@@ -1845,10 +1871,15 @@ fn frame(data: &FD4TaskData) {
                     w.speed += (v - w.speed) * 0.4;
                 }
                 w.still = if w.speed < 0.2 { w.still + w.acc } else { 0.0 };
+                let vy = (p.1 - w.pos[1]).abs() / w.acc;
+                if vy < 15.0 {
+                    w.climb += (vy - w.climb) * 0.4;
+                }
                 w.pos = [p.0, p.1, p.2];
                 w.acc = 0.0;
             }
-            let (speed, walking) = (w.speed, w.still < 0.3);
+            let (speed, walking, climb) = (w.speed, w.still < 0.3, w.climb);
+            let on_ladder = ladder_anim(current_anim(&player_ref.chr_ins));
             // how far between two SM64 ticks this frame is (the pose is blended, like in play)
             let alpha = (w.acc * 30.0).clamp(0.0, 1.0);
             drop(walk);
@@ -1859,7 +1890,7 @@ fn frame(data: &FD4TaskData) {
             if tick {
                 let mut inputs = sm64::SM64MarioInputs::default();
                 // walking pace (SM64's full stick runs at ~9 m/s); teleport-sized jumps don't count
-                if walking && dir != glam::Vec3::ZERO {
+                if walking && dir != glam::Vec3::ZERO && !on_ladder {
                     inputs.cam_look_x = -dir.x;
                     inputs.cam_look_z = dir.z;
                     // a clear walking pace: at the Tarnished's slow speed SM64 would sit on the edge
@@ -1886,6 +1917,7 @@ fn frame(data: &FD4TaskData) {
                     f
                 });
                 drop(loaded_at);
+                let ladder_was = m.state.action == ACT_ER_LADDER;
                 let parts = worker::call("follow tick", move |ctx| {
                     if let Some(floors) = &floors {
                         unsafe { sm64::sm64_static_surfaces_load(floors.as_ptr(), floors.len() as u32) };
@@ -1896,6 +1928,16 @@ fn frame(data: &FD4TaskData) {
                         unsafe { sm64::sm64_set_mario_faceangle(id, face) };
                     }
                     unsafe { sm64::sm64_set_mario_position(id, sm[0], sm[1], sm[2]) };
+                    // on a ladder: SM64's pole climb, at a pace from how fast the game moves him
+                    // (~1.5 m/s climbing = SM64's quick climb)
+                    if on_ladder {
+                        unsafe {
+                            sm64::sm64_er_set_ladder(if climb > 0.2 { (climb * 1.2).clamp(0.5, 2.5) } else { 0.0 });
+                            if !ladder_was {
+                                sm64::sm64_set_mario_action(id, ACT_ER_LADDER);
+                            }
+                        }
+                    }
                     let mut state = sm64::SM64MarioState::default();
                     {
                         let mut buffers = ctx.geo.buffers();
