@@ -659,7 +659,17 @@ fn pose_task_late() {
     // launch without the built files, no ROM, or the no-ground safety)
     let coming = ENABLED.load(Ordering::Relaxed)
         || (assets::ready() && (!AUTO_STARTED.load(Ordering::Relaxed) || SM64_READY.load(Ordering::Relaxed)));
-    if WANTED.load(Ordering::Relaxed) && coming && !worker::hung() && engine_mario::POSE.lock().unwrap_or_else(|e| e.into_inner()).is_none() {
+    // (and never for long: after 5 s without Mario the Tarnished shows again)
+    static WAITING_SINCE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+    let no_pose = engine_mario::POSE.lock().unwrap_or_else(|e| e.into_inner()).is_none();
+    let too_long = {
+        let mut w = WAITING_SINCE.lock().unwrap_or_else(|e| e.into_inner());
+        if !no_pose {
+            *w = None;
+        }
+        w.get_or_insert_with(std::time::Instant::now).elapsed().as_secs_f32() > 5.0
+    };
+    if WANTED.load(Ordering::Relaxed) && coming && !worker::hung() && no_pose && !too_long {
         if let Some(p) = (unsafe { WorldChrMan::instance_mut() }).ok().and_then(|w| w.main_player.as_mut()) {
             p.chr_ins.opacity_keyframes_multiplier = 0.0;
             p.chr_ins.opacity_keyframes_multiplier_previous = 0.0;
@@ -1060,9 +1070,13 @@ fn frame(data: &FD4TaskData) {
                 collision::build(&caster, [0.0, 0.0, 0.0])
             }
         };
-        if !surfaces.is_empty() {
-            load_surfaces(&surfaces);
-        }
+        // plus a floor exactly where the game has his feet (and for a moment after): whatever he
+        // stands on, SM64 can create Mario there, at the right height (a floor it doesn't know,
+        // like some platforms, made creation fail and left the player invisible)
+        let mut surfaces = surfaces;
+        surfaces.extend(flat_floor([0.0, 0.0, 0.0]));
+        load_surfaces(&surfaces);
+        *FOLLOW_ENDED.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
         {
             let mut saved = SAVED_LOADOUT.lock().unwrap_or_else(|e| e.into_inner());
             if saved.is_none() {
