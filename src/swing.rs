@@ -32,15 +32,20 @@ fn ragdoll_on() -> bool {
     crate::paths::config("boss_ragdoll").is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "on" | "1" | "true" | "yes"))
 }
 
-/// Ragdoll amount 0..1 (0 = back to normal animation).
+/// Ragdoll amount 0..1 (0 = back to normal animation). The game's ragdoll states (ChrCtrl +0x128,
+/// synced into the ragdoll each frame by 0x1403cca60): 0 off, 2 full (death), 3 full, 4 blend.
+/// Which one we use: boss_ragdoll_state in er_mario.ini (default 3, the full non-death one).
 fn set_ragdoll(chr: &mut eldenring::cs::ChrIns, amount: f32) {
+    let state = crate::paths::config("boss_ragdoll_state").and_then(|v| v.parse().ok()).unwrap_or(3u8);
     let c = &mut chr.chr_ctrl;
     if amount <= 0.0 {
         c.chr_ragdoll_state = 0;
         c.ragdoll_revive_time = 1.0;
-    } else {
+    } else if state == 4 {
         c.chr_ragdoll_state = 4;
         c.ragdoll_revive_time = amount.min(RAGDOLL_FULL);
+    } else {
+        c.chr_ragdoll_state = state;
     }
 }
 
@@ -226,7 +231,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
             if left > GET_UP {
                 set_ragdoll(chr, RAGDOLL_FULL);
             } else if left > 0.0 {
-                set_ragdoll(chr, RAGDOLL_FULL * left / GET_UP);
+                set_ragdoll(chr, (RAGDOLL_FULL * left / GET_UP).max(0.01));
             } else {
                 set_ragdoll(chr, 0.0);
                 log("swing: boss back on his feet");

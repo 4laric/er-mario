@@ -250,6 +250,17 @@ pub fn nearby(center: &HavokPosition, range: f32, origin: [f32; 3]) -> Vec<Targe
                 }
                 continue;
             }
+            // research: watch the first nearby enemy's ragdoll layer (+0xE8 of its CSRagdollIns)
+            // until it dies, to catch the code that switches the ragdoll on (watch.rs)
+            if crate::debug() && chr.modules.data.hp > 0 && chr.chr_ctrl.ragdoll_ins != 0 && !matches!(chr.chr_type, ChrType::Unk7) {
+                let p = chr.modules.physics.position;
+                let (dx, dz) = (p.0 - center.0, p.2 - center.2);
+                // (a new one whenever the last watch is done)
+                if dx * dx + dz * dz < 9.0 && !crate::watch::armed() && !crate::watch::done() {
+                    log(format!("watch: watching the ragdoll of a {:?} team {} (hp {})", chr.chr_type, chr.team_type, chr.modules.data.hp));
+                    crate::watch::arm(chr.chr_ctrl.ragdoll_ins + 0xE8);
+                }
+            }
             if chr.modules.data.hp <= 0 {
                 continue;
             }

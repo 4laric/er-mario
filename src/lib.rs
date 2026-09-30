@@ -25,6 +25,7 @@ mod swing;
 mod stats;
 mod version;
 mod voice;
+mod watch;
 mod worker;
 
 use std::f32::consts::PI;
@@ -1220,6 +1221,7 @@ fn frame(data: &FD4TaskData) {
     let wedges = if m.dead { 0 } else { (m.state.health.max(0) >> 8) as u8 };
     // (no HUD on the loading screen: the Tarnished has no animation yet while the world loads)
     let loading = current_anim(&player_ref.chr_ins) == -1;
+    watch::poll();
     let paused = WORLD_PAUSED.load(Ordering::Relaxed);
     hud::set(wedges.min(8), m.dead || loading || paused || MENU_OPEN.load(Ordering::Relaxed), true);
     // the tail swing: watch the bosses' stance, carry / throw / fly the grabbed one
