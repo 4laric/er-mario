@@ -9,6 +9,26 @@ Work in progress.
 No Nintendo data is in this repository or in the mod. Mario's model, textures, sounds and
 icons are built on the player's PC from their own Super Mario 64 ROM (US version).
 
+## Getting started
+
+You need Elden Ring on Steam and a Super Mario 64 ROM (US version).
+
+1. Install **me3**, the mod loader: [me3.help](https://me3.help)
+2. Download the **ER-Mario** zip from this repository's Releases page and unzip it somewhere
+   you can write to, like your Documents folder.
+3. Put your Super Mario 64 ROM into the **ER-Mario** folder.
+4. Start the game by double-clicking **er-mario.me3**.
+5. The first time, the mod builds Mario from your ROM. When it says
+   **RESTART THE GAME TO PLAY AS MARIO**, quit and start it again.
+
+That's it, you're Mario. Start a new character, the mod uses its own save file.
+
+**Controls:** left stick moves, A jumps, X or B punches and kicks, LB crouches and ground
+pounds, Y is Elden Ring's interact. On keyboard: WASD, L to jump, comma to punch, K to crouch,
+E to interact.
+
+**Stay offline.** me3 starts the game offline with anti-cheat off. Never play this mod online.
+
 ## How it works
 
 - A Rust DLL loaded by [me3](https://me3.help), offline only (Easy Anti-Cheat off, separate save).
