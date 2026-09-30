@@ -222,9 +222,17 @@ fn hud_task() {
     let Ok(fe) = (unsafe { eldenring::cs::CSFeManImp::instance_mut() }) else { return };
     use eldenring::cs::CSFeManHudState as Hud;
     let mario = ENABLED.load(Ordering::Relaxed) && IN_WORLD.load(Ordering::Relaxed);
-    // HideAll: nothing of Elden Ring's HUD (it takes NPC subtitles along; PopupMenu kept them but
-    // also showed other HUD pieces that break the Mario look, his call: no subtitles)
-    let hidden = Hud::HideAll;
+    // HideAll: nothing of Elden Ring's HUD. It also hides the subtitle display, and a dialogue line
+    // can only be skipped while it's shown, so during a conversation (the game stops taking the
+    // character's actions, but no menu is up and the world runs) it's PopupMenu: subtitles on.
+    let talking = MENU_OPEN.load(Ordering::Relaxed) && !game_menu_open() && !WORLD_PAUSED.load(Ordering::Relaxed);
+    {
+        static WAS: AtomicBool = AtomicBool::new(false);
+        if WAS.swap(talking, Ordering::Relaxed) != talking {
+            log(format!("hud: conversation {}", if talking { "started: subtitles on" } else { "over" }));
+        }
+    }
+    let hidden = if talking { Hud::PopupMenu } else { Hud::HideAll };
     if mario {
         // Elden Ring's own bars are hidden (the enemies' health bars are the overlay's, hud.rs)
         if matches!(fe.hud_state, Hud::Default) || (HIDDEN.load(Ordering::Relaxed) && fe.hud_state != hidden && !matches!(fe.hud_state, Hud::Default) && !gameover::showing() && !game_menu_open()) {
