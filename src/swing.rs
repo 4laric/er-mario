@@ -220,6 +220,25 @@ pub fn watch_stances(bosses: &[FieldInsHandle]) {
         }
     }
     st.meter.retain(|e| e.1 > 0.0);
+    // research: every boss animation change (to see whether knockdown / stagger IDs are shared)
+    {
+        static LAST: Mutex<Vec<(u64, i32)>> = Mutex::new(Vec::new());
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        for h in bosses {
+            let Some(chr) = wcm.chr_ins_by_handle(h) else { continue };
+            let t = &chr.modules.time_act;
+            let anim = t.anim_queue[(t.read_idx % 10) as usize].anim_id;
+            let k = key(h);
+            match last.iter_mut().find(|(kk, _)| *kk == k) {
+                Some(e) if e.1 == anim => {}
+                Some(e) => {
+                    log(format!("boss anim: c{:04} {} -> {anim}", chr.character_id, e.1));
+                    e.1 = anim;
+                }
+                None => last.push((k, anim)),
+            }
+        }
+    }
     for h in bosses {
         let Some(chr) = wcm.chr_ins_by_handle(h) else { continue };
         // (enemies' stance is their poise: the toughness module is the player's)
