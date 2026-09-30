@@ -63,6 +63,23 @@ fn protect(chr: &mut eldenring::cs::ChrIns, guard: &mut i32) {
     }
 }
 
+/// Thrown off the map (far below where he was thrown from, or falling for long): back where
+/// Mario threw him from, standing, like Bowser jumping back onto his platform.
+fn off_the_map(chr: &eldenring::cs::ChrIns, home: Vec3, falling_for: f32) -> bool {
+    let y = chr.modules.physics.position.1;
+    y < home.y - 15.0 || falling_for > 3.0
+}
+
+fn bring_back(chr: &mut eldenring::cs::ChrIns, home: Vec3) {
+    set_ragdoll(chr, 0.0);
+    let ph = &mut chr.modules.physics;
+    ph.position = HavokPosition(home.x, home.y + 0.5, home.z, 0.0);
+    ph.chr_proxy_pos_update_requested = true;
+    ph.gravity_disabled = false;
+    chr.modules.fall.fall_timer = 0.0;
+    log("swing: thrown off the map: he's back where he was thrown from");
+}
+
 /// Whether this boss is lying there after a throw (no damage then).
 pub fn is_down(h: &FieldInsHandle) -> bool {
     let st = STATE.lock().unwrap_or_else(|e| e.into_inner());
@@ -112,10 +129,12 @@ struct State {
     /// the thrown boss's HP floor while flying / lying (nothing but the throw's own impact may
     /// take more: the game's fall damage would kill him)
     guard_hp: i32,
+    /// where he was thrown from (a throw off the map brings him back here, like SM64's Bowser)
+    home: Vec3,
 }
 
 static STATE: Mutex<State> =
-    Mutex::new(State { phase: Phase::Idle, open: Vec::new(), toughness: Vec::new(), meter: Vec::new(), last_face: None, spin: 0.0, rest: (Vec3::ZERO, 0.0), guard_hp: 0 });
+    Mutex::new(State { phase: Phase::Idle, open: Vec::new(), toughness: Vec::new(), meter: Vec::new(), last_face: None, spin: 0.0, rest: (Vec3::ZERO, 0.0), guard_hp: 0, home: Vec3::ZERO });
 /// the stagger cue to play (SM64 thread)
 static CUE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -256,6 +275,11 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
             let now = Vec3::new(p.0, p.1, p.2);
             let v = (now - st.rest.0).length() / dt.max(1e-3);
             st.rest = (now, if v < 0.5 { st.rest.1 + dt } else { 0.0 });
+            if off_the_map(chr, st.home, 0.0) {
+                bring_back(chr, st.home);
+                st.phase = Phase::Idle;
+                return None;
+            }
             let left = until.saturating_duration_since(Instant::now()).as_secs_f32();
             let waited = DOWN_FOR + GET_UP - left;
             let at_rest = st.rest.1 > 0.5 || (waited > 8.0 && v < 3.0);
@@ -286,6 +310,12 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
             let speed = if settle { peak } else { peak * 0.6 + v * 0.4 };
             let still = if v < 1.0 { still + dt } else { 0.0 };
             let age = since.elapsed().as_secs_f32();
+            if off_the_map(chr, st.home, if now.y < last.y { age } else { 0.0 }) {
+                bring_back(chr, st.home);
+                st.phase = Phase::Idle;
+                st.guard_hp = 0;
+                return Some((boss, IMPACT_MAX));
+            }
             // the impact: his speed collapses, he runs into the map, or he's come to rest
             let stopped = !settle && v < speed * 0.35;
             let into_map = !settle && hit(last + Vec3::Y * 0.5, now + Vec3::Y * 0.5).is_some();
@@ -326,6 +356,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                 let pos = Vec3::new(ph.position.0, ph.position.1, ph.position.2);
                 log(format!("swing: thrown at {speed:.1} m/s"));
                 st.guard_hp = 0;
+                st.home = mario;
                 let radius = (reach - 0.9).max(0.4);
                 st.phase = Phase::Flying { boss, pos, vel, since: Instant::now(), radius };
                 None
@@ -377,11 +408,12 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                     st.guard_hp = 0;
                     Some((boss, pct))
                 }
-                _ if since.elapsed().as_secs_f32() > 4.0 => {
-                    ph.gravity_disabled = false;
-                    set_ragdoll(chr, 0.0);
+                _ if since.elapsed().as_secs_f32() > 4.0 || next.y < st.home.y - 15.0 => {
+                    let home = st.home;
+                    bring_back(chr, home);
                     st.phase = Phase::Idle;
-                    None
+                    st.guard_hp = 0;
+                    Some((boss, IMPACT_MAX))
                 }
                 _ if ragdoll_on() && chr.chr_ctrl.ragdoll_ins != 0 && since.elapsed().as_secs_f32() > 0.1 => {
                     // a few frames of guided flight gave his ragdoll's bodies the throw's speed:
