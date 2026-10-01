@@ -218,8 +218,15 @@ fn reassert() {
     let Some((chr, l)) = *LAYOUT.lock().unwrap_or_else(|e| e.into_inner()) else { return };
     let Some(b) = BONES.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|m| m.bones[HEAD]) else { return };
     let Some(want) = *LAST_HEAD.lock().unwrap_or_else(|e| e.into_inner()) else { return };
-    // (the cached character may be gone after a load)
-    if b >= l.count || !explore::readable(chr + 0x398, 8) || !explore::readable(l.model + b * 0x30, 12) {
+    // the cached character may be gone after a load: only the live player, with the same pose
+    // buffers (no memory checks here: this runs on the game's animation workers many times a frame)
+    use fromsoftware_shared::FromStatic;
+    let live = unsafe { eldenring::cs::WorldChrMan::instance() }
+        .ok()
+        .and_then(|w| w.main_player.as_ref())
+        .map(|p| &p.chr_ins as *const _ as usize);
+    let raw = |a: usize| unsafe { *(a as *const usize) };
+    if live != Some(chr) || b >= l.count || raw(chr + 0x398) != l.imp || raw(l.imp + 0x60) != l.model {
         return;
     }
     let now = unsafe { *((l.model + b * 0x30) as *const [f32; 3]) };
