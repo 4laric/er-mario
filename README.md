@@ -7,14 +7,14 @@ bosses, Bob-omb style throws, SM64's health meter, coins and Lakitu's camera.
 Work in progress.
 
 No Nintendo data is in this repository or in the mod. Mario's model, textures, sounds and
-icons are built on the player's PC from their own Super Mario 64 ROM (US version).
+icons are built on the player's PC from their own Super Mario 64 ROM (US version). 
 
 ## Getting started
 
 You need Elden Ring on Steam and a Super Mario 64 ROM (US version).
 
-1. Install **me3**, the mod loader: [me3.help](https://me3.help)
-2. Download the **ER-Mario** zip from this repository's Releases page and unzip it somewhere
+1. Install **me3**, the mod loader: [me3.help](github.com/deltarooo/er-mario/releases)
+2. Download the **ER-Mario** zip from this repository's [Releases page](https://me3.help)and unzip it somewhere
    you can write to, like your Documents folder.
 3. Put your Super Mario 64 ROM into the **ER-Mario** folder.
 4. Start the game by double-clicking **er-mario.me3**.
