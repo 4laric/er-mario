@@ -32,7 +32,9 @@ show the mod is loaded. Start a new character, the mod uses its own save file.
 **Stuck somewhere?** Press **F7** to lift Mario 1 m. The mod also lifts him by itself when he
 can't move for a few seconds. If that does not work, you might have to fast travel to a grace.
 
-Only tested with an Xbox One controller and with keyboard and mouse.
+Tested with an Xbox One controller, a PS5 controller (through Steam) and keyboard and mouse.
+The mod reads controllers the way Xbox pads report them: PlayStation, Switch and other pads
+work through Steam Input, which Steam turns on for them by default.
 
 **Stay offline.** me3 starts the game offline with anti-cheat off. Never play this mod online.
 
