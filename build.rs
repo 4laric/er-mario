@@ -1,8 +1,14 @@
-// Compiles libsm64 (SM64's decompiled Mario code) straight into the mod DLL.
+// Compiles libsm64 (SM64's decompiled Mario code, patched for the mod, in libsm64/) straight into
+// the mod DLL.
 use std::path::Path;
 
 fn main() {
-    let root = Path::new("../libsm64/src");
+    let root = Path::new("libsm64/src");
+    // Mario's model code isn't in the repository: libsm64's script downloads it from the SM64
+    // decompilation
+    if !root.join("decomp/mario/geo.inc.c").exists() {
+        panic!("Mario's model code is missing: run `python import-mario-geo.py` in the libsm64 folder first");
+    }
     let dirs = ["", "decomp", "decomp/engine", "decomp/include/PR", "decomp/game", "decomp/pc",
                 "decomp/pc/audio", "decomp/mario", "decomp/tools", "decomp/audio"];
     let mut build = cc::Build::new();
@@ -25,5 +31,5 @@ fn main() {
         .define("SM64_LIB_EXPORT", None)
         .warnings(false)
         .compile("sm64");
-    println!("cargo:rerun-if-changed=../libsm64/src");
+    println!("cargo:rerun-if-changed=libsm64/src");
 }

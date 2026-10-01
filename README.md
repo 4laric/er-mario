@@ -52,26 +52,27 @@ Only tested with an Xbox One controller and with keyboard and mouse.
   fed with Elden Ring's live Havok collision.
 - The Tarnished stays in the game underneath and follows Mario, so doors, graces, menus, deaths
   and saves keep working.
-- The mod builds against a slightly patched libsm64,
-  [libsm64-er-mario](https://github.com/deltarooo/libsm64-er-mario) (ladder climbing, carrying,
-  dive grabs, head turning, model part export).
+- The `libsm64` folder is libsm64 with a few patches for the mod (ladder climbing, carrying,
+  dive grabs, head turning, model part export), compiled into the DLL.
 
 ## Building
 
-Windows, with [Rust](https://rustup.rs), Visual Studio Build Tools (C++) and
-[LLVM](https://github.com/llvm/llvm-project/releases) (clang-cl compiles libsm64's C code).
-The two dependencies sit next to this repository:
+Windows, with [Rust](https://rustup.rs), Visual Studio Build Tools (C++),
+[LLVM](https://github.com/llvm/llvm-project/releases) (clang-cl compiles libsm64's C code) and
+Python. fromsoftware-rs sits next to this repository:
 
 ```
 git clone https://github.com/deltarooo/er-mario
-git clone -b er-mario https://github.com/deltarooo/libsm64-er-mario libsm64
 git clone https://github.com/vswarte/fromsoftware-rs
 git -C fromsoftware-rs checkout 59fbd3b
-cd libsm64
+cd er-mario/libsm64
 python import-mario-geo.py
-cd ../er-mario
+cd ..
 .\build.ps1
 ```
+
+`import-mario-geo.py` downloads Mario's model code from the SM64 decompilation once; it isn't
+part of this repository.
 
 `build.ps1 -Dist <ER-Mario folder>` also copies the DLL into an ER-Mario folder (it renames
 the old DLL first, so it works while the game is running; the next start loads the new one).
@@ -80,7 +81,8 @@ The release zip is that folder without the generated `package` folder and log.
 ## License
 
 [MIT](LICENSE). This covers the mod's own code only; Super Mario 64 data comes from the
-player's ROM and nothing of Nintendo's or FromSoftware's is included.
+player's ROM and nothing of Nintendo's or FromSoftware's is included. The `libsm64` folder keeps
+libsm64's own license, CC0 ([libsm64/LICENSE.md](libsm64/LICENSE.md)).
 
 ## Credits
 
