@@ -12,8 +12,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 
-use fromsoftware_shared::FromStatic;
-
 use crate::log;
 
 const STATUS_MESSAGE_YOU_DIED: i32 = 5;

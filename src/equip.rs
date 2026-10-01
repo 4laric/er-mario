@@ -107,15 +107,35 @@ const BARE: [(usize, u32); 4] = [(12, 10000 | PROTECTOR), (13, 10100 | PROTECTOR
 const VAGABOND_ICONS: [u16; 4] = [14010, 14011, 14012, 14013];
 const MARIO_ICONS: [u16; 4] = [13580, 13581, 13582, 13583];
 
-/// Switches the Vagabond set's model and menu icons to Mario's (or back).
+/// The Vagabond rows' own hide flags (saved the first time Mario's model goes on).
+static VAGABOND_HIDE: std::sync::Mutex<Option<[[u8; 96]; 4]>> = std::sync::Mutex::new(None);
+
+/// Switches the Vagabond set's model and menu icons to Mario's (or back). With Mario's model every
+/// part of the Tarnished is hidden too: face, beard and hair are skinned to bones Mario's parts
+/// ride on (Neck...), so they would otherwise poke out of Mario.
 fn set_vagabond_model(model: u16) -> bool {
     let Ok(repo) = (unsafe { eldenring::cs::SoloParamRepository::instance_mut() }) else { return false };
-    let icons = if model == MARIO_MODEL { MARIO_ICONS } else { VAGABOND_ICONS };
+    let mario = model == MARIO_MODEL;
+    let icons = if mario { MARIO_ICONS } else { VAGABOND_ICONS };
+    let mut saved = VAGABOND_HIDE.lock().unwrap_or_else(|e| e.into_inner());
+    if mario && saved.is_none() {
+        let mut own = [[0; 96]; 4];
+        for (k, id) in VAGABOND.into_iter().enumerate() {
+            let Some(row) = repo.get::<eldenring::cs::EquipParamProtector>(id) else { return false };
+            own[k] = get_hide(row);
+        }
+        *saved = Some(own);
+    }
     for (k, id) in VAGABOND.into_iter().enumerate() {
         let Some(row) = repo.get_mut::<eldenring::cs::EquipParamProtector>(id) else { return false };
         row.set_equip_model_id(model);
         row.set_icon_id_m(icons[k]);
         row.set_icon_id_f(icons[k]);
+        match (mario, *saved) {
+            (true, _) => set_hide(row, [1; 96]),
+            (false, Some(own)) => set_hide(row, own[k]),
+            (false, None) => {}
+        }
     }
     true
 }
@@ -265,3 +285,204 @@ pub fn restore(player: &PlayerIns, saved: &Loadout) -> bool {
 }
 
 
+
+/// Every "hide this body part" flag of an armour row (face, beard, hair, body...).
+fn get_hide(row: &eldenring::param::EQUIP_PARAM_PROTECTOR_ST) -> [u8; 96] {
+    [
+        row.invisible_flag_sex_ver00(),
+        row.invisible_flag_sex_ver01(),
+        row.invisible_flag_sex_ver02(),
+        row.invisible_flag_sex_ver03(),
+        row.invisible_flag_sex_ver04(),
+        row.invisible_flag_sex_ver05(),
+        row.invisible_flag_sex_ver06(),
+        row.invisible_flag_sex_ver07(),
+        row.invisible_flag_sex_ver08(),
+        row.invisible_flag_sex_ver09(),
+        row.invisible_flag_sex_ver10(),
+        row.invisible_flag_sex_ver11(),
+        row.invisible_flag_sex_ver12(),
+        row.invisible_flag_sex_ver13(),
+        row.invisible_flag_sex_ver14(),
+        row.invisible_flag_sex_ver15(),
+        row.invisible_flag_sex_ver16(),
+        row.invisible_flag_sex_ver17(),
+        row.invisible_flag_sex_ver18(),
+        row.invisible_flag_sex_ver19(),
+        row.invisible_flag_sex_ver20(),
+        row.invisible_flag_sex_ver21(),
+        row.invisible_flag_sex_ver22(),
+        row.invisible_flag_sex_ver23(),
+        row.invisible_flag_sex_ver24(),
+        row.invisible_flag_sex_ver25(),
+        row.invisible_flag_sex_ver26(),
+        row.invisible_flag_sex_ver27(),
+        row.invisible_flag_sex_ver28(),
+        row.invisible_flag_sex_ver29(),
+        row.invisible_flag_sex_ver30(),
+        row.invisible_flag_sex_ver31(),
+        row.invisible_flag_sex_ver32(),
+        row.invisible_flag_sex_ver33(),
+        row.invisible_flag_sex_ver34(),
+        row.invisible_flag_sex_ver35(),
+        row.invisible_flag_sex_ver36(),
+        row.invisible_flag_sex_ver37(),
+        row.invisible_flag_sex_ver38(),
+        row.invisible_flag_sex_ver39(),
+        row.invisible_flag_sex_ver40(),
+        row.invisible_flag_sex_ver41(),
+        row.invisible_flag_sex_ver42(),
+        row.invisible_flag_sex_ver43(),
+        row.invisible_flag_sex_ver44(),
+        row.invisible_flag_sex_ver45(),
+        row.invisible_flag_sex_ver46(),
+        row.invisible_flag_sex_ver47(),
+        row.invisible_flag_sex_ver48(),
+        row.invisible_flag_sex_ver49(),
+        row.invisible_flag_sex_ver50(),
+        row.invisible_flag_sex_ver51(),
+        row.invisible_flag_sex_ver52(),
+        row.invisible_flag_sex_ver53(),
+        row.invisible_flag_sex_ver54(),
+        row.invisible_flag_sex_ver55(),
+        row.invisible_flag_sex_ver56(),
+        row.invisible_flag_sex_ver57(),
+        row.invisible_flag_sex_ver58(),
+        row.invisible_flag_sex_ver59(),
+        row.invisible_flag_sex_ver60(),
+        row.invisible_flag_sex_ver61(),
+        row.invisible_flag_sex_ver62(),
+        row.invisible_flag_sex_ver63(),
+        row.invisible_flag_sex_ver64(),
+        row.invisible_flag_sex_ver65(),
+        row.invisible_flag_sex_ver66(),
+        row.invisible_flag_sex_ver67(),
+        row.invisible_flag_sex_ver68(),
+        row.invisible_flag_sex_ver69(),
+        row.invisible_flag_sex_ver70(),
+        row.invisible_flag_sex_ver71(),
+        row.invisible_flag_sex_ver72(),
+        row.invisible_flag_sex_ver73(),
+        row.invisible_flag_sex_ver74(),
+        row.invisible_flag_sex_ver75(),
+        row.invisible_flag_sex_ver76(),
+        row.invisible_flag_sex_ver77(),
+        row.invisible_flag_sex_ver78(),
+        row.invisible_flag_sex_ver79(),
+        row.invisible_flag_sex_ver80(),
+        row.invisible_flag_sex_ver81(),
+        row.invisible_flag_sex_ver82(),
+        row.invisible_flag_sex_ver83(),
+        row.invisible_flag_sex_ver84(),
+        row.invisible_flag_sex_ver85(),
+        row.invisible_flag_sex_ver86(),
+        row.invisible_flag_sex_ver87(),
+        row.invisible_flag_sex_ver88(),
+        row.invisible_flag_sex_ver89(),
+        row.invisible_flag_sex_ver90(),
+        row.invisible_flag_sex_ver91(),
+        row.invisible_flag_sex_ver92(),
+        row.invisible_flag_sex_ver93(),
+        row.invisible_flag_sex_ver94(),
+        row.invisible_flag_sex_ver95(),
+    ]
+}
+
+fn set_hide(row: &mut eldenring::param::EQUIP_PARAM_PROTECTOR_ST, v: [u8; 96]) {
+    row.set_invisible_flag_sex_ver00(v[0]);
+    row.set_invisible_flag_sex_ver01(v[1]);
+    row.set_invisible_flag_sex_ver02(v[2]);
+    row.set_invisible_flag_sex_ver03(v[3]);
+    row.set_invisible_flag_sex_ver04(v[4]);
+    row.set_invisible_flag_sex_ver05(v[5]);
+    row.set_invisible_flag_sex_ver06(v[6]);
+    row.set_invisible_flag_sex_ver07(v[7]);
+    row.set_invisible_flag_sex_ver08(v[8]);
+    row.set_invisible_flag_sex_ver09(v[9]);
+    row.set_invisible_flag_sex_ver10(v[10]);
+    row.set_invisible_flag_sex_ver11(v[11]);
+    row.set_invisible_flag_sex_ver12(v[12]);
+    row.set_invisible_flag_sex_ver13(v[13]);
+    row.set_invisible_flag_sex_ver14(v[14]);
+    row.set_invisible_flag_sex_ver15(v[15]);
+    row.set_invisible_flag_sex_ver16(v[16]);
+    row.set_invisible_flag_sex_ver17(v[17]);
+    row.set_invisible_flag_sex_ver18(v[18]);
+    row.set_invisible_flag_sex_ver19(v[19]);
+    row.set_invisible_flag_sex_ver20(v[20]);
+    row.set_invisible_flag_sex_ver21(v[21]);
+    row.set_invisible_flag_sex_ver22(v[22]);
+    row.set_invisible_flag_sex_ver23(v[23]);
+    row.set_invisible_flag_sex_ver24(v[24]);
+    row.set_invisible_flag_sex_ver25(v[25]);
+    row.set_invisible_flag_sex_ver26(v[26]);
+    row.set_invisible_flag_sex_ver27(v[27]);
+    row.set_invisible_flag_sex_ver28(v[28]);
+    row.set_invisible_flag_sex_ver29(v[29]);
+    row.set_invisible_flag_sex_ver30(v[30]);
+    row.set_invisible_flag_sex_ver31(v[31]);
+    row.set_invisible_flag_sex_ver32(v[32]);
+    row.set_invisible_flag_sex_ver33(v[33]);
+    row.set_invisible_flag_sex_ver34(v[34]);
+    row.set_invisible_flag_sex_ver35(v[35]);
+    row.set_invisible_flag_sex_ver36(v[36]);
+    row.set_invisible_flag_sex_ver37(v[37]);
+    row.set_invisible_flag_sex_ver38(v[38]);
+    row.set_invisible_flag_sex_ver39(v[39]);
+    row.set_invisible_flag_sex_ver40(v[40]);
+    row.set_invisible_flag_sex_ver41(v[41]);
+    row.set_invisible_flag_sex_ver42(v[42]);
+    row.set_invisible_flag_sex_ver43(v[43]);
+    row.set_invisible_flag_sex_ver44(v[44]);
+    row.set_invisible_flag_sex_ver45(v[45]);
+    row.set_invisible_flag_sex_ver46(v[46]);
+    row.set_invisible_flag_sex_ver47(v[47]);
+    row.set_invisible_flag_sex_ver48(v[48]);
+    row.set_invisible_flag_sex_ver49(v[49]);
+    row.set_invisible_flag_sex_ver50(v[50]);
+    row.set_invisible_flag_sex_ver51(v[51]);
+    row.set_invisible_flag_sex_ver52(v[52]);
+    row.set_invisible_flag_sex_ver53(v[53]);
+    row.set_invisible_flag_sex_ver54(v[54]);
+    row.set_invisible_flag_sex_ver55(v[55]);
+    row.set_invisible_flag_sex_ver56(v[56]);
+    row.set_invisible_flag_sex_ver57(v[57]);
+    row.set_invisible_flag_sex_ver58(v[58]);
+    row.set_invisible_flag_sex_ver59(v[59]);
+    row.set_invisible_flag_sex_ver60(v[60]);
+    row.set_invisible_flag_sex_ver61(v[61]);
+    row.set_invisible_flag_sex_ver62(v[62]);
+    row.set_invisible_flag_sex_ver63(v[63]);
+    row.set_invisible_flag_sex_ver64(v[64]);
+    row.set_invisible_flag_sex_ver65(v[65]);
+    row.set_invisible_flag_sex_ver66(v[66]);
+    row.set_invisible_flag_sex_ver67(v[67]);
+    row.set_invisible_flag_sex_ver68(v[68]);
+    row.set_invisible_flag_sex_ver69(v[69]);
+    row.set_invisible_flag_sex_ver70(v[70]);
+    row.set_invisible_flag_sex_ver71(v[71]);
+    row.set_invisible_flag_sex_ver72(v[72]);
+    row.set_invisible_flag_sex_ver73(v[73]);
+    row.set_invisible_flag_sex_ver74(v[74]);
+    row.set_invisible_flag_sex_ver75(v[75]);
+    row.set_invisible_flag_sex_ver76(v[76]);
+    row.set_invisible_flag_sex_ver77(v[77]);
+    row.set_invisible_flag_sex_ver78(v[78]);
+    row.set_invisible_flag_sex_ver79(v[79]);
+    row.set_invisible_flag_sex_ver80(v[80]);
+    row.set_invisible_flag_sex_ver81(v[81]);
+    row.set_invisible_flag_sex_ver82(v[82]);
+    row.set_invisible_flag_sex_ver83(v[83]);
+    row.set_invisible_flag_sex_ver84(v[84]);
+    row.set_invisible_flag_sex_ver85(v[85]);
+    row.set_invisible_flag_sex_ver86(v[86]);
+    row.set_invisible_flag_sex_ver87(v[87]);
+    row.set_invisible_flag_sex_ver88(v[88]);
+    row.set_invisible_flag_sex_ver89(v[89]);
+    row.set_invisible_flag_sex_ver90(v[90]);
+    row.set_invisible_flag_sex_ver91(v[91]);
+    row.set_invisible_flag_sex_ver92(v[92]);
+    row.set_invisible_flag_sex_ver93(v[93]);
+    row.set_invisible_flag_sex_ver94(v[94]);
+    row.set_invisible_flag_sex_ver95(v[95]);
+}

@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::{log, paths};
 
 /// Bump when the generated files change, so existing installs rebuild.
-const VERSION: &str = "er-mario assets 1";
+const VERSION: &str = "er-mario assets 2";
 const STAMP: &str = "package/.built";
 const PIECES: [&str; 4] = ["hd", "bd", "am", "lg"];
 const QUALITIES: [&str; 2] = ["hi", "low"];
@@ -62,14 +62,19 @@ fn write(rel: &str, data: &[u8]) -> Result<(), String> {
 /// Builds every package file from the exported Mario model.
 pub fn build(model: &model::MarioModel) -> Result<(), String> {
     let t0 = std::time::Instant::now();
+    let step = |p: f32, text: &str| crate::hud::setup_progress("Setting up ER Mario", p, text);
+    step(0.05, "Reading the game archives");
     let _ = std::fs::remove_file(paths::file(STAMP));
     let archives = archive::Archives::open()?;
     log(format!("assets: archives indexed in {:.1} s", t0.elapsed().as_secs_f32()));
     let albedo = tex::mario_albedo(model);
 
     // the armour set, as its own model 999: Mario in the chest piece, the rest empty
+    let mut done = 0.0;
     for piece in PIECES {
         for suffix in ["", "_l"] {
+            step(0.15 + 0.5 * done / (PIECES.len() * 2) as f32, "Building the model and textures");
+            done += 1.0;
             let src = dcx::decompress(&archives.read(&format!("/parts/{piece}_m_1280{suffix}.partsbnd.dcx"))?)?;
             let mut files = bnd4::read(&src)?;
             for f in &mut files {
@@ -93,6 +98,7 @@ pub fn build(model: &model::MarioModel) -> Result<(), String> {
         }
     }
     log(format!("assets: armour built ({:.1} s)", t0.elapsed().as_secs_f32()));
+    step(0.7, "Building the material");
 
     // its material: the vanilla list plus P[BD_M_0999]_Fabric (renamed textures, no detail grime)
     let mat = dcx::decompress(&archives.read("/material/allmaterial.matbinbnd.dcx")?)?;
@@ -108,8 +114,10 @@ pub fn build(model: &model::MarioModel) -> Result<(), String> {
     log(format!("assets: material built ({:.1} s)", t0.elapsed().as_secs_f32()));
 
     // menu icons
+    step(0.75, "Building the menu icons");
     let icons = icons::render_all(model);
     log(format!("assets: icons rendered ({:.1} s)", t0.elapsed().as_secs_f32()));
+    step(0.85, "Saving the menu icons");
     for q in QUALITIES {
         let tpf = dcx::decompress(&archives.read(&format!("/menu/{q}/01_common.tpf.dcx"))?)?;
         write(&format!("package/menu/{q}/01_common.tpf.dcx"), &dcx::compress(&tex::patch_icon_atlas(&tpf, &icons)?)?)?;

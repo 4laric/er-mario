@@ -170,29 +170,6 @@ pub fn build(c: &Caster, mario: [f32; 3]) -> Vec<SM64Surface> {
     out
 }
 
-/// Tries every single-bit filter (plus a few extras) straight down from above the player and
-/// returns the one whose hit is closest to the player's feet.
-pub fn probe_filter(player: &PlayerIns, feet: [f32; 3]) -> Option<u32> {
-    let havok = unsafe { CSHavokMan::instance() }.ok()?;
-    let start = HavokPosition(feet[0], feet[1] + 2.0, feet[2], 0.0);
-    let mut best: Option<(u32, f32)> = None;
-    let mut candidates: Vec<u32> = (0..32).map(|b| 1u32 << b).collect();
-    candidates.extend([0, 0xFFFF_FFFF]);
-    for f in candidates {
-        match havok.phys_world.cast_ray(f, &start, PositionDelta(0.0, -10.0, 0.0), player) {
-            Some(hit) => {
-                let off = hit.1 - feet[1];
-                log(format!("  filter {f:#010x}: hit {off:+.2} m from feet"));
-                if off.abs() < 0.5 && best.is_none_or(|(_, o)| off.abs() < o.abs()) {
-                    best = Some((f, off));
-                }
-            }
-            None => log(format!("  filter {f:#010x}: miss")),
-        }
-    }
-    best.map(|(f, _)| f)
-}
-
 /// A surface in Elden Ring world space (survives re-centring of SM64's origin).
 #[derive(Clone, Copy)]
 pub struct WorldTri {

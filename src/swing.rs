@@ -133,6 +133,36 @@ pub fn holding() -> bool {
 
 /// Whether Mario is doing something with this boss (holding, throwing, or he's down or settling
 /// from a throw): his final blow waits for the throw's impact.
+/// Whether a hit Mario (at `mario`) just took came from the boss he holds or just threw: Mario has
+/// him by the tail or he's flying, and no other enemy is within reach (the game doesn't say who
+/// hit the player). Everyone else still hurts him.
+pub fn harmless(mario: Vec3) -> bool {
+    let boss = {
+        let st = STATE.lock().unwrap_or_else(|e| e.into_inner());
+        match st.phase {
+            Phase::Held { boss, .. } | Phase::Flying { boss, .. } | Phase::Limp { boss, .. } => boss,
+            _ => return false,
+        }
+    };
+    let Ok(wcm) = (unsafe { WorldChrMan::instance() }) else { return false };
+    for set in wcm.chr_sets.iter().flatten() {
+        for chr in set.characters() {
+            let chr: &eldenring::cs::ChrIns = chr;
+            if key(&chr.field_ins_handle) == key(&boss) || chr.modules.data.hp <= 0 || crate::combat::own_side(chr.team_type) {
+                continue;
+            }
+            if !matches!(chr.chr_type, eldenring::cs::ChrType::Npc | eldenring::cs::ChrType::Unk6 | eldenring::cs::ChrType::Unk7 | eldenring::cs::ChrType::Unk9 | eldenring::cs::ChrType::Unk12) {
+                continue;
+            }
+            let q = chr.modules.physics.position;
+            if Vec3::new(q.0 - mario.x, q.1 - mario.y, q.2 - mario.z).length() <= 3.0 {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 pub fn busy_with(h: &FieldInsHandle) -> bool {
     let st = STATE.lock().unwrap_or_else(|e| e.into_inner());
     matches!(st.phase, Phase::Held { boss, .. } | Phase::Flying { boss, .. } | Phase::Limp { boss, .. } | Phase::Down { boss, .. } | Phase::Settling { boss, .. } if key(&boss) == key(h))

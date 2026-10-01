@@ -222,6 +222,13 @@ pub struct Target {
     pub sm: [f32; 3],
 }
 
+impl Target {
+    /// A breakable prop (crate, barrel, clutter), not a character.
+    pub fn is_prop(&self) -> bool {
+        self.handle.is_none()
+    }
+}
+
 fn handle_key(h: &FieldInsHandle) -> u64 {
     unsafe { std::mem::transmute_copy::<FieldInsHandle, u64>(h) }
 }
@@ -250,7 +257,9 @@ pub fn nearby(center: &HavokPosition, range: f32, origin: [f32; 3]) -> Vec<Targe
                 }
                 continue;
             }
-            if chr.modules.data.hp <= 0 {
+            // (team 0 belongs to no side: the game's invisible helpers, e.g. one at every grace with
+            // ~1900 HP and a 0.1 m body, which Mario could punch to death)
+            if chr.modules.data.hp <= 0 || chr.team_type == 0 {
                 continue;
             }
             let p = chr.modules.physics.position;
@@ -505,12 +514,19 @@ const TARGET_RADIUS: f32 = 55.0;
 const TARGET_HEIGHT: f32 = 180.0;
 /// Mario's own hitbox radius in SM64 (units) plus a little reach.
 const MARIO_RADIUS: f32 = 45.0;
+/// A punch's reach beyond the target's body (SM64 units), within this cone (cos 50°) in front.
+const PUNCH_REACH: f32 = 80.0;
+const PUNCH_CONE_COS: f32 = 0.64;
 
 /// Called on the libsm64 thread right after a tick: which targets Mario hits now.
 /// Stomps in a row on one enemy before Mario has to land (SM64's head bounce would juggle forever).
 const MAX_STOMPS: u32 = 1;
 
-pub fn hits(id: i32, state: &sm64::SM64MarioState, targets: &[([f32; 3], f32, f32, usize)], no_stomp: &[usize]) -> Vec<(usize, Attack)> {
+pub fn hits(id: i32, state: &sm64::SM64MarioState, targets: &[([f32; 3], f32, f32, usize)], no_stomp: &[usize]) -> Vec<(usize, Attack, bool)> {
+    // diving (SM64's dive or its belly slide): kept with each hit, a dive into an enemy's back
+    // picks it up like diving into a Bob-omb
+    const ACT_FLAG_DIVING: u32 = 0x0008_0000;
+    let diving = state.action & ACT_FLAG_DIVING != 0;
     let mut out = Vec::new();
     let m = state.position;
     for &(t, radius, height, index) in targets {
@@ -520,13 +536,20 @@ pub fn hits(id: i32, state: &sm64::SM64MarioState, targets: &[([f32; 3], f32, f3
         }
         let (dx, dz) = (t[0] - m[0], t[2] - m[2]);
         let horizontal = (dx * dx + dz * dz).sqrt();
-        if horizontal > MARIO_RADIUS + radius || m[1] > t[1] + height || m[1] + 100.0 < t[1] {
+        let attack = classify(state);
+        // punches reach a bit further than SM64's (its hitbox is made for small objects): up to
+        // PUNCH_REACH, in front of Mario (picking enemies up from behind was hard to land)
+        let in_front = horizontal > 1.0 && {
+            let (fx, fz) = (state.face_angle.sin(), state.face_angle.cos());
+            (dx * fx + dz * fz) / horizontal >= PUNCH_CONE_COS
+        };
+        let punch_reach = matches!(attack, Attack::Punch) && in_front && horizontal <= PUNCH_REACH + radius;
+        if (horizontal > MARIO_RADIUS + radius && !punch_reach) || m[1] > t[1] + height || m[1] + 100.0 < t[1] {
             continue;
         }
-        let attack = classify(state);
         // aim at mid-body: stomps need Mario above that
-        if unsafe { sm64::sm64_mario_attack(id, t[0], t[1] + height * 0.5, t[2], height * 0.5) } {
-            out.push((index, attack));
+        if unsafe { sm64::sm64_mario_attack(id, t[0], t[1] + height * 0.5, t[2], height * 0.5) } || punch_reach {
+            out.push((index, attack, diving));
         }
     }
     out
@@ -534,7 +557,7 @@ pub fn hits(id: i32, state: &sm64::SM64MarioState, targets: &[([f32; 3], f32, f3
 
 impl Combat {
     /// Game thread: deals the damage for libsm64's hits. `tick` is the SM64 tick counter.
-    pub fn deal(&mut self, player: &ChrIns, targets: &[Target], hits: &[(usize, Attack)], tick: u32) {
+    pub fn deal(&mut self, player: &ChrIns, targets: &[Target], hits: &[(usize, Attack, bool)], tick: u32) {
         if !self.patched {
             self.patched = patch_params();
             if !self.patched {
@@ -557,7 +580,7 @@ impl Combat {
             }
             false
         });
-        for &(index, attack) in hits {
+        for &(index, attack, diving) in hits {
             let Some(target) = targets.get(index) else { continue };
             if self.cooldown.contains_key(&target.key) {
                 continue;
@@ -572,8 +595,9 @@ impl Combat {
                 if crate::swing::is_down(handle) || crate::carry::is_carried(handle) {
                     continue;
                 }
-                // a regular enemy punched from behind: Mario picks it up like a Bob-omb (carry.rs)
-                if matches!(attack, Attack::Punch) && liftable(handle) {
+                // a regular enemy punched or dived into from behind: Mario picks it up like a
+                // Bob-omb (carry.rs)
+                if (matches!(attack, Attack::Punch) || diving) && liftable(handle) {
                     let me = player.modules.physics.position;
                     if crate::carry::try_pick_up(handle, glam::Vec3::new(me.0, me.1, me.2), target.radius / 100.0, target.height / 100.0) {
                         self.victims.insert(target.key, (*handle, tick));

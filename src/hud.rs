@@ -34,6 +34,13 @@ const GLYPH_STAR: usize = 0x4800;
 /// HUD size relative to SM64's, and the meter centre's height on SM64's 240-line screen
 const SIZE: f32 = 0.65;
 const HEIGHT: f32 = 192.0;
+/// ...and where it rests while Mario is hurt (just under the top edge), after sliding up
+/// METER_RISE_AFTER seconds after the last health change, over METER_RISE_TIME seconds
+const HEIGHT_TOP: f32 = 216.0;
+/// above the top edge: where it slides to when Mario is back to full health
+const HEIGHT_GONE: f32 = 270.0;
+const METER_RISE_AFTER: f32 = 2.0;
+const METER_RISE_TIME: f32 = 0.4;
 /// seconds the meter stays up after Mario is back to full health
 const LINGER: f32 = 1.5;
 /// the coin counter's left edge, as a share of the screen width
@@ -177,6 +184,25 @@ pub fn load(rom: &[u8]) {
 // ---- what to show (set by the Mario frame) ------------------------------------------------------
 
 /// wedges 0..=8, or 0xFF: no HUD
+/// The first-launch setup box: what's happening, progress (None: no bar), a line of detail.
+pub struct Setup {
+    pub title: String,
+    pub progress: Option<f32>,
+    pub text: String,
+}
+
+static SETUP: Mutex<Option<Setup>> = Mutex::new(None);
+
+/// Shows (Some) or hides (None) the first-launch setup box.
+pub fn set_setup(setup: Option<Setup>) {
+    *SETUP.lock().unwrap_or_else(|e| e.into_inner()) = setup;
+}
+
+/// Shows the setup box with a progress bar.
+pub fn setup_progress(title: &str, progress: f32, text: &str) {
+    set_setup(Some(Setup { title: title.into(), progress: Some(progress), text: text.into() }));
+}
+
 static WEDGES: AtomicU8 = AtomicU8::new(0xFF);
 static DEATHS: AtomicU32 = AtomicU32::new(0);
 static COINS: AtomicU32 = AtomicU32::new(0);
@@ -247,14 +273,24 @@ pub fn set_tags(tags: Vec<Tag>) {
 
 pub struct Overlay {
     textures: Vec<TextureId>,
-    shown: Option<(u8, Instant)>,
+    meter: Option<Meter>,
+}
+
+/// The power meter's motion (SM64's: damage brings it down, healing fills it where it is).
+struct Meter {
+    /// wedges last frame
+    wedges: u8,
+    /// when Mario last lost health (the meter came down then)
+    hit: Instant,
+    /// when he got back to full health (it slides out then), and its height at that moment
+    full: Option<(Instant, f32)>,
 }
 
 /// Starts the overlay (hooks the game's DirectX 12 presentation).
 pub fn install(module: usize) {
     use hudhook::hooks::dx12::ImguiDx12Hooks;
     let hmodule = hudhook::windows::Win32::Foundation::HINSTANCE(module as _);
-    let overlay = Overlay { textures: Vec::new(), shown: None };
+    let overlay = Overlay { textures: Vec::new(), meter: None };
     match hudhook::Hudhook::builder().with::<ImguiDx12Hooks>(overlay).with_hmodule(hmodule).build().apply() {
         Ok(()) => log("hud: overlay hooked"),
         Err(e) => log(format!("hud: overlay hook failed: {e:?}")),
@@ -306,6 +342,31 @@ impl ImguiRenderLoop for Overlay {
     }
 
     fn render(&mut self, ui: &mut imgui::Ui) {
+        // first launch: building Mario from the ROM (needs no textures, so it shows from the start)
+        if let Some(setup) = SETUP.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            let size = ui.io().display_size;
+            let scale = (size[1] / 1080.0).max(1.0) * 1.6;
+            let w = 560.0 * scale / 1.6;
+            ui.window("##er_mario_setup")
+                .position([size[0] * 0.5, size[1] * 0.42], imgui::Condition::Always)
+                .position_pivot([0.5, 0.5])
+                .size([w, 0.0], imgui::Condition::Always)
+                .bg_alpha(0.9)
+                .no_decoration()
+                .no_inputs()
+                .build(|| {
+                    ui.set_window_font_scale(scale);
+                    ui.text("ER MARIO");
+                    ui.separator();
+                    ui.text_wrapped(&setup.title);
+                    if let Some(p) = setup.progress {
+                        imgui::ProgressBar::new(p.clamp(0.0, 1.0)).size([-1.0, 0.0]).build(ui);
+                    }
+                    if !setup.text.is_empty() {
+                        ui.text_wrapped(&setup.text);
+                    }
+                });
+        }
         if self.textures.len() <= IMG_ARROW_DOWN {
             return;
         }
@@ -334,6 +395,30 @@ impl ImguiRenderLoop for Overlay {
                 image(IMG_BOWSER, l, top, s, s);
             }
             return;
+        }
+
+        // outside the world (title screen, menus, loading): which mod is loaded, bottom left, in
+        // SM64's HUD font (it has no dot: a small square at the baseline); only once Mario's files are
+        // built and loaded this session (not during the first-launch setup)
+        if !crate::in_world() && crate::assets::ready() {
+            let g = 10.0 * size[1] / 240.0 * SIZE;
+            let (mut x, y) = (size[1] * 0.04, size[1] * 0.96 - g);
+            for c in concat!("ER MARIO ", env!("CARGO_PKG_VERSION")).chars() {
+                match c {
+                    ' ' => x += g * 0.5,
+                    '.' => {
+                        let d = g * 0.18;
+                        dl.add_rect([x, y + g - d * 1.6], [x + d, y + g - d * 0.6], [1.0, 1.0, 1.0, 1.0]).filled(true).build();
+                        x += g * 0.35;
+                    }
+                    c => {
+                        if let Some(id) = glyph_for(c) {
+                            image(id, x, y, g, g);
+                        }
+                        x += g * 0.8;
+                    }
+                }
+            }
         }
 
         // nothing outside Mario mode, in menus, or when the Mario frame stopped (loading)
@@ -408,15 +493,35 @@ impl ImguiRenderLoop for Overlay {
                 }
             }
         }
-        let since = match self.shown {
-            Some((w, t)) if w == wedges => t,
-            _ => {
-                let now = Instant::now();
-                self.shown = Some((wedges, now));
-                now
+        // the power meter's height (None: out of the screen). Damage brings it down to HEIGHT,
+        // a moment later it slides up to HEIGHT_TOP; healing just fills it where it is; back to
+        // full health it stays LINGER s, then slides out of the screen.
+        let now = Instant::now();
+        let ease = |x: f32| {
+            let x = x.clamp(0.0, 1.0);
+            x * x * (3.0 - 2.0 * x)
+        };
+        let hurt_height = |hit: Instant| {
+            HEIGHT + (HEIGHT_TOP - HEIGHT) * ease((now.duration_since(hit).as_secs_f32() - METER_RISE_AFTER) / METER_RISE_TIME)
+        };
+        let long_ago = now.checked_sub(std::time::Duration::from_secs(60)).unwrap_or(now);
+        let m = self.meter.get_or_insert(Meter { wedges, hit: long_ago, full: (wedges >= 8).then_some((long_ago, HEIGHT_GONE)) });
+        if wedges < m.wedges {
+            m.hit = now;
+        }
+        if wedges >= 8 && m.wedges < 8 {
+            m.full = Some((now, hurt_height(m.hit)));
+        } else if wedges < 8 {
+            m.full = None;
+        }
+        m.wedges = wedges;
+        let meter_height = match m.full {
+            None => Some(hurt_height(m.hit)),
+            Some((t, h0)) => {
+                let out = (now.duration_since(t).as_secs_f32() - LINGER) / METER_RISE_TIME;
+                (out < 1.0).then(|| h0 + (HEIGHT_GONE - h0) * ease(out))
             }
         };
-        let meter = wedges < 8 || since.elapsed().as_secs_f32() <= LINGER;
 
         // the counters (SM64's layout: icon, x, digits 12 px apart, 15 px from the top), in the
         // top of the screen, always
@@ -448,9 +553,9 @@ impl ImguiRenderLoop for Overlay {
             }
         }
 
-        // the power meter, centred at the top
-        if meter {
-            let (cx, cy) = (size[0] * 0.5, size[1] * (1.0 - HEIGHT / 240.0));
+        // the power meter, centred at the top (its height worked out above)
+        if let Some(height) = meter_height {
+            let (cx, cy) = (size[0] * 0.5, size[1] * (1.0 - height / 240.0));
             image(IMG_BASE, cx - 32.0 * px, cy - 32.0 * px, 64.0 * px, 64.0 * px);
             if wedges > 0 {
                 image(IMG_PIES + (wedges.min(8) - 1) as usize, cx - 16.0 * px, cy - 16.0 * px, 32.0 * px, 32.0 * px);

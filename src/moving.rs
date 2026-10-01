@@ -169,6 +169,28 @@ impl Moving {
         rebuild
     }
 
+    /// Debug (F5): the moving objects near Mario: body, where it is, its yaw since it was built,
+    /// and its size.
+    pub fn describe(&self, h: &HavokCollision, origin: [f32; 3], mario: [f32; 3]) -> Vec<String> {
+        let m = Vec3::from(mario);
+        let mut out = Vec::new();
+        for (i, t) in &self.tracked {
+            let Some((p, q)) = h.transform(*i) else { continue };
+            let center = sm(origin, p);
+            let d = q * t.q0.inverse();
+            let d = Quat::from_xyzw(d.x, -d.y, -d.z, d.w);
+            let f = d * Vec3::Z;
+            out.push(format!(
+                "  moving body #{i}: {:.0} units from Mario, yaw {:.0} deg since built, radius {:.1} m, {} triangles",
+                center.distance(m),
+                f.x.atan2(f.z).to_degrees(),
+                t.mesh.radius(),
+                t.mesh.tris().len()
+            ));
+        }
+        out
+    }
+
     /// Deletes every surface object (Mario is going away).
     pub fn clear(&mut self, h: &mut HavokCollision) {
         let ids: Vec<u32> = self.tracked.drain().map(|(i, t)| {

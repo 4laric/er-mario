@@ -44,6 +44,14 @@ pub fn forward() -> Option<Vec3> {
     (at.elapsed().as_secs_f32() < 0.2).then(|| Vec3::new(v[6], v[7], v[8]))
 }
 
+/// Keeps the camera where it is (a popup pausing the world): the last matrix stays current, so it
+/// goes on being written instead of the game's camera taking over.
+pub fn hold() {
+    if let Some((_, at)) = LAST.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        *at = std::time::Instant::now();
+    }
+}
+
 pub fn reapply() {
     // only this frame's (not a stale one when the Mario frame stopped, e.g. loading)
     let Some((v, at)) = *LAST.lock().unwrap_or_else(|e| e.into_inner()) else { return };
@@ -57,9 +65,14 @@ pub fn reapply() {
         return;
     }
     let Ok(camera) = (unsafe { CSCamera::instance_mut() }) else { return };
-    let mm = &mut camera.pers_cam_1.matrix;
-    (mm.0.0, mm.0.1, mm.0.2, mm.1.0, mm.1.1, mm.1.2) = (v[0], v[1], v[2], v[3], v[4], v[5]);
-    (mm.2.0, mm.2.1, mm.2.2, mm.3.0, mm.3.1, mm.3.2) = (v[6], v[7], v[8], v[9], v[10], v[11]);
+    // every camera of the set, at every step from the game's camera update to drawing: the game
+    // copies its own camera back in between, and what it sets up there (culling, the sun shadow
+    // area) should follow ours
+    for cam in [&mut camera.pers_cam_1, &mut camera.pers_cam_2, &mut camera.pers_cam_3, &mut camera.pers_cam_4] {
+        let mm = &mut cam.matrix;
+        (mm.0.0, mm.0.1, mm.0.2, mm.1.0, mm.1.1, mm.1.2) = (v[0], v[1], v[2], v[3], v[4], v[5]);
+        (mm.2.0, mm.2.1, mm.2.2, mm.3.0, mm.3.1, mm.3.2) = (v[6], v[7], v[8], v[9], v[10], v[11]);
+    }
 }
 
 /// SM64's first-person view (C-up while Mario stands still): look yaw and pitch

@@ -141,10 +141,6 @@ fn map_bones(skeleton: usize) -> Option<BoneMap> {
     Some(BoneMap { skeleton, bones })
 }
 
-/// Writes the Mario pose into the player's render skeleton (LocationUpdate_PrePhysics).
-/// F12: log the pose we write and what the skeleton holds before our write, per task.
-pub static DUMP: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-
 #[derive(Clone, Copy, PartialEq)]
 struct PoseLayout {
     imp: usize,
@@ -185,7 +181,59 @@ fn pose_layout(chr: usize, raw: impl Fn(usize) -> usize) -> Option<PoseLayout> {
     Some(l)
 }
 
-pub fn apply(chr: usize, task: &str) {
+/// Where the game's character animation job has just written a pose (found with a hardware
+/// watchpoint on a bone; run for every character, on the game's worker threads): right after the call that
+/// writes the model pose (the job goes on to hand the bones to rendering, so later is too late),
+/// and the job's return as a fallback.
+const ANIM_DONE_RVAS: [usize; 2] = [0x41da14, 0x402194];
+
+/// The renderer draws the previous frame while the next one updates: without this, Mario's bones
+/// sit in the Tarnished's animated pose from the animation job until our next task runs, and
+/// anything reading them in between (shadows) gets the Tarnished's shape. Putting our pose back the
+/// moment the animation job is done closes that window.
+pub unsafe fn install_anim_hook() {
+    use ilhook::x64::{CallbackOption, HookFlags, hook_closure_jmp_back};
+    let Ok(base) = (unsafe { windows::Win32::System::LibraryLoader::GetModuleHandleW(None) }) else { return };
+    for rva in ANIM_DONE_RVAS {
+        let hook = |_: *mut ilhook::x64::Registers| {
+            let _ = std::panic::catch_unwind(reassert);
+        };
+        match unsafe { hook_closure_jmp_back(base.0 as usize + rva, hook, CallbackOption::None, HookFlags::empty()) } {
+            Ok(h) => {
+                std::mem::forget(h);
+                log(format!("engine mario: hooked the animation job at +{rva:#x}"));
+            }
+            Err(e) => log(format!("engine mario: animation hook at +{rva:#x} failed: {e:?}")),
+        }
+    }
+}
+
+/// Our pose was overwritten (the head bone isn't where we put it): write it again.
+fn reassert() {
+    if !crate::ENABLED.load(std::sync::atomic::Ordering::Relaxed) || POSE.lock().unwrap_or_else(|e| e.into_inner()).is_none() {
+        return;
+    }
+    // (waits if one of our pose tasks is writing right now: it runs alongside the animation jobs,
+    // and the animation may land after its write)
+    let Some((chr, l)) = *LAYOUT.lock().unwrap_or_else(|e| e.into_inner()) else { return };
+    let Some(b) = BONES.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|m| m.bones[HEAD]) else { return };
+    let Some(want) = *LAST_HEAD.lock().unwrap_or_else(|e| e.into_inner()) else { return };
+    // (the cached character may be gone after a load)
+    if b >= l.count || !explore::readable(chr + 0x398, 8) || !explore::readable(l.model + b * 0x30, 12) {
+        return;
+    }
+    let now = unsafe { *((l.model + b * 0x30) as *const [f32; 3]) };
+    if Vec3::from(now).distance(Vec3::from(want)) > 1e-4 {
+        apply(chr);
+    }
+}
+
+/// Where apply last put the head bone (model space).
+static LAST_HEAD: Mutex<Option<[f32; 3]>> = Mutex::new(None);
+
+/// Writes the Mario pose into the player's render skeleton (after the game's animation, in every
+/// task group up to drawing).
+pub fn apply(chr: usize) {
     let Some(pose) = *POSE.lock().unwrap_or_else(|e| e.into_inner()) else { return };
     // ChrIns+0x398 CSFD4LocationHkaPoseImporter: +0x48 hkaSkeleton, +0x50 local / +0x60 model pose
     // (hkQsTransform, 0x30 each, counts at +0x58/+0x68); hkaSkeleton +0x20 parent indices.
@@ -205,10 +253,6 @@ pub fn apply(chr: usize, task: &str) {
         }
         return;
     };
-    let dump = DUMP.load(std::sync::atomic::Ordering::Relaxed) > 0;
-    if dump {
-        DUMP.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-    }
     type Qs = (Vec3, Quat);
     let read = |base: usize, b: usize| -> Qs {
         let v = unsafe { *((base + b * 0x30) as *const [f32; 12]) };
@@ -265,11 +309,10 @@ pub fn apply(chr: usize, task: &str) {
                 (parent.0 + parent.1 * l.0, (parent.1 * l.1).normalize())
             }
         };
-        if dump && pinned[b].is_some() {
-            let before = read(model, b);
-            log(format!("{task} bone {b}: game model pos {:?}, ours {:?}", before.0, m.0));
-        }
         write(model, b, m, scale);
         world.push(m);
+    }
+    if let Some(head) = world.get(map.bones[HEAD]) {
+        *LAST_HEAD.lock().unwrap_or_else(|e| e.into_inner()) = Some(head.0.into());
     }
 }

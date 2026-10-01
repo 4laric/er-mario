@@ -271,6 +271,44 @@ fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
 }
 
+fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+/// +1 if the game's front faces wind so that (b-a)x(c-a) points along the vertex normals, -1 if
+/// against: measured on the armour's own triangles (triangle lists of u16 indices).
+fn front_winding(f: &Flver, vb: &VertexBuffer, fs: &Faceset) -> Option<f64> {
+    if f.d[fs.header + 4] != 0 {
+        return None; // triangle strip
+    }
+    let vert = |i: usize| -> Option<([f64; 3], [f64; 3])> {
+        let o = vb.offset + i * vb.vsize;
+        (i < vb.vcount).then(|| {
+            let p = [0, 1, 2].map(|k| f32::from_le_bytes(f.d[o + k * 4..o + k * 4 + 4].try_into().unwrap()) as f64);
+            let n = [0, 1, 2].map(|k| (f.d[o + 12 + k] as f64 - 127.0) / 127.0);
+            (p, n)
+        })
+    };
+    let idx: Vec<usize> = f.d[fs.offset..fs.offset + fs.count * 2].chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]]) as usize).collect();
+    let (mut along, mut against) = (0, 0);
+    for t in idx.chunks(3).filter(|t| t.len() == 3) {
+        let (Some(a), Some(b), Some(c)) = (vert(t[0]), vert(t[1]), vert(t[2])) else { continue };
+        let face = cross(sub(b.0, a.0), sub(c.0, a.0));
+        let n = [0, 1, 2].map(|k| a.1[k] + b.1[k] + c.1[k]);
+        let d = dot(face, n);
+        if d > 0.0 {
+            along += 1;
+        } else if d < 0.0 {
+            against += 1;
+        }
+    }
+    (along + against > 0).then(|| if along >= against { 1.0 } else { -1.0 })
+}
+
 /// Mario into mesh `target` of an armour FLVER, every other mesh emptied.
 pub fn build_mario(mut f: Flver, model: &MarioModel, target: usize) -> Result<Vec<u8>, String> {
     let names = f.bone_names();
@@ -311,6 +349,20 @@ pub fn build_mario(mut f: Flver, model: &MarioModel, target: usize) -> Result<Ve
     if vb.vsize != 40 || members.get(..7) != Some(&EXPECTED[..]) || verts.len() > vb.vcount {
         return Err("the chest piece's vertex layout is not the expected one".into());
     }
+    // every triangle faces the way the game's front faces do (SM64's are mirrored on X), so back
+    // faces can be culled like on the armour itself
+    let winding = mesh.facesets.first().and_then(|&fi| front_winding(&f, &vb, &fsets[fi]));
+    let mut tris = tris;
+    if let Some(w) = winding {
+        for t in &mut tris {
+            let [a, b, c] = t.map(|i| &verts[i as usize]);
+            let face = cross(sub(b.pos, a.pos), sub(c.pos, a.pos));
+            let n = [0, 1, 2].map(|k| a.normal[k] + b.normal[k] + c.normal[k]);
+            if dot(face, n) * w < 0.0 {
+                t.swap(1, 2);
+            }
+        }
+    }
     let mut buf = Vec::with_capacity(vb.vcount * 40);
     for v in &verts {
         let n = normalize(v.normal);
@@ -340,15 +392,23 @@ pub fn build_mario(mut f: Flver, model: &MarioModel, target: usize) -> Result<Ve
     }
     f.d[vb.offset..vb.offset + vb.length].copy_from_slice(&buf);
     let idx: Vec<u8> = tris.iter().flatten().flat_map(|i| i.to_le_bytes()).collect();
+    // Mario goes into the biggest faceset (LOD 0); the smaller LODs can't hold him, so their headers
+    // point at that same index data: whichever LOD the game draws (shadows use lower ones, picked
+    // by distance and angle), it is all of Mario (empty, they left him without one)
+    let full = *mesh.facesets.iter().max_by_key(|&&fi| fsets[fi].count).ok_or("chest piece mesh has no facesets")?;
+    let fs = &fsets[full];
+    if idx.len() > fs.length {
+        return Err("Mario does not fit in the chest piece's index buffer".into());
+    }
+    f.d[fs.offset..fs.offset + idx.len()].copy_from_slice(&idx);
+    f.d[fs.offset + idx.len()..fs.offset + fs.length].fill(0);
+    let (count, offset) = ((idx.len() / 2) as i32, i32_at(&f.d, fs.header + 12));
     for &fi in &mesh.facesets {
-        let fs = &fsets[fi];
-        f.d[fs.header + 5] = 0; // no backface culling
-        let room = fs.count - fs.count % 3;
-        // LODs too small for Mario stay empty
-        let data: &[u8] = if idx.len() / 2 <= room { &idx } else { &[] };
-        let n = data.len().min(fs.length);
-        f.d[fs.offset..fs.offset + n].copy_from_slice(&data[..n]);
-        f.d[fs.offset + n..fs.offset + fs.length].fill(0);
+        let h = fsets[fi].header;
+        f.d[h + 5] = if winding.is_some() { 1 } else { 0 }; // cull back faces (unknown winding: both sides)
+        f.d[h + 8..h + 12].copy_from_slice(&count.to_le_bytes());
+        f.d[h + 12..h + 16].copy_from_slice(&offset.to_le_bytes());
+        f.d[h + 16..h + 20].copy_from_slice(&(fs.length as i32).to_le_bytes());
     }
     crate::log(format!("assets: Mario mesh {} vertices, {} triangles", verts.len(), tris.len()));
     Ok(f.d)
