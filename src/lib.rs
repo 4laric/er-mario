@@ -70,7 +70,6 @@ static DEBUG_DRAW: AtomicBool = AtomicBool::new(false);
 static MENU_OPEN: AtomicBool = AtomicBool::new(false);
 static PAD: Mutex<Option<(XINPUT_STATE, std::time::Instant)>> = Mutex::new(None);
 
-/// er_mario.log in the mod folder, started fresh every launch.
 /// A diagnostic line: only in the log with `debug = 1` (players' logs stay short).
 pub(crate) fn dlog(msg: impl AsRef<str>) {
     if debug() {
@@ -78,12 +77,18 @@ pub(crate) fn dlog(msg: impl AsRef<str>) {
     }
 }
 
+/// logs\er_mario.log in the mod folder (its own folder, so players find it to send it), started
+/// fresh every launch; the previous session's stays as logs\er_mario.prev.log.
 pub(crate) fn log(msg: impl AsRef<str>) {
     static FRESH: std::sync::Once = std::sync::Once::new();
-    let path = paths::file("er_mario.log");
+    let path = paths::file("logs/er_mario.log");
     FRESH.call_once(|| {
-        // the previous session's log stays as er_mario.prev.log
-        let _ = std::fs::rename(&path, paths::file("er_mario.prev.log"));
+        let _ = std::fs::create_dir_all(paths::file("logs"));
+        // (versions before 0.3.2 kept the log next to the DLL: it becomes the previous one)
+        let (old, old_prev) = (paths::file("er_mario.log"), paths::file("er_mario.prev.log"));
+        let previous = if old.is_file() { old } else { path.clone() };
+        let _ = std::fs::rename(previous, paths::file("logs/er_mario.prev.log"));
+        let _ = std::fs::remove_file(old_prev);
         let _ = std::fs::write(&path, "");
     });
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
@@ -559,7 +564,7 @@ fn startup() {
             Err(e) => {
                 log(format!("assets: build failed: {e}"));
                 hud::set_setup(None);
-                notify("ER Mario could not build its files, see er_mario.log", "MARIO COULD NOT BE BUILT (SEE ER_MARIO.LOG)");
+                notify("ER Mario could not build its files, see logs\\er_mario.log", "MARIO COULD NOT BE BUILT (SEE THE LOGS FOLDER)");
             }
         },
         Some(None) if build => notify("ER Mario could not read Mario's model from the ROM", "MARIO COULD NOT BE BUILT (SEE ER_MARIO.LOG)"),

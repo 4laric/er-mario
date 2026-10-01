@@ -50,6 +50,17 @@ work through Steam Input, which Steam turns on for them by default.
   move, as if two sticks were steering him. Restart the game and it's gone. It seems to happen
   when the controller connects or reconnects while the game is already running.
 
+## Reporting problems
+
+Open an [issue](https://github.com/deltarooo/er-mario/issues) and say what happened and
+when. Attach both files from the **logs** folder inside your ER-Mario folder:
+`er_mario.log` (the last session) and `er_mario.prev.log` (the one before). If the game didn't
+start at all, me3's own log helps too: paste `%LOCALAPPDATA%\garyttierney\me3\data\logs` into
+the Explorer address bar, open the **er-mario** folder and attach the newest file.
+
+The logs contain your mod folder's path, which can include your Windows user name; feel free
+to blank it out.
+
 ## How it works
 
 - A Rust DLL loaded by [me3](https://me3.help), offline only (Easy Anti-Cheat off, separate save).
@@ -82,7 +93,7 @@ The model code isn't part of this repository; it gets compiled into the DLL.
 
 `build.ps1 -Dist <ER-Mario folder>` also copies the DLL into an ER-Mario folder (it renames
 the old DLL first, so it works while the game is running; the next start loads the new one).
-The release zip is that folder without the generated `package` folder and log.
+The release zip is that folder without the generated `package` and `logs` folders.
 
 ## License
 
