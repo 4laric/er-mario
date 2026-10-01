@@ -49,7 +49,7 @@ use windows::Win32::UI::Input::XboxController::{
     XINPUT_GAMEPAD_BACK, XINPUT_GAMEPAD_RIGHT_THUMB, XINPUT_GAMEPAD_START, XINPUT_GAMEPAD_X, XINPUT_GAMEPAD_Y,
     XINPUT_STATE,
 };
-use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW};
+use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows::core::{PCSTR, w};
 
 /// Metres per SM64 unit (Mario is ~160 units tall, so ~1.6 m).
@@ -107,13 +107,28 @@ fn debug_key(vk: i32) -> bool {
 
 type XInputGetStateFn = unsafe extern "system" fn(u32, *mut XINPUT_STATE) -> u32;
 
-/// Real pad goes to Mario; the game gets an idle pad (right stick kept for the camera).
+/// The real XInputGetState (or whatever was in the game's import table: Steam's overlay hook).
+static XINPUT_ORIGINAL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The game's XInputGetState, through its import table (see install_xinput_hooks).
+unsafe extern "system" fn xinput_get_state(index: u32, state: *mut XINPUT_STATE) -> u32 {
+    let original: XInputGetStateFn = unsafe { std::mem::transmute(XINPUT_ORIGINAL.load(Ordering::Relaxed)) };
+    let rc = unsafe { original(index, state) };
+    xinput_filter(index, state, rc)
+}
+
+/// The inline-hook fallback (only if the import table entry isn't found).
 fn xinput_hook(reg: *mut ilhook::x64::Registers, original: usize) -> usize {
     let (index, state) = unsafe { ((*reg).rcx as u32, (*reg).rdx as *mut XINPUT_STATE) };
     let original: XInputGetStateFn = unsafe { std::mem::transmute(original) };
     let rc = unsafe { original(index, state) };
+    xinput_filter(index, state, rc) as usize
+}
+
+/// Real pad goes to Mario; the game gets an idle pad (right stick kept for the camera).
+fn xinput_filter(index: u32, state: *mut XINPUT_STATE, rc: u32) -> u32 {
     if rc != 0 || state.is_null() || index != 0 {
-        return rc as usize;
+        return rc;
     }
     let s = unsafe { &mut *state };
     *PAD.lock().unwrap_or_else(|e| e.into_inner()) = Some((*s, std::time::Instant::now()));
@@ -151,15 +166,26 @@ fn xinput_hook(reg: *mut ilhook::x64::Registers, original: usize) -> usize {
             g.sThumbRY = 0;
         }
     }
-    rc as usize
+    rc
 }
 
 unsafe fn install_xinput_hooks() {
+    // Swap the game's own import table entry for XInputGetState. Patching xinput's code instead
+    // (an inline hook) clashed with Steam's overlay on Windows, which hooks the same function's
+    // first bytes: the game crashed inside XINPUT1_4.dll. Through the import table, Steam's hook
+    // (if any) stays in the chain as the "original" we call.
+    match unsafe { patch_import(c"XInputGetState", 2, xinput_get_state as *const () as usize) } {
+        Some((dll, previous)) => {
+            XINPUT_ORIGINAL.store(previous, Ordering::Relaxed);
+            log(format!("hooked XInputGetState through the game's import table ({dll})"));
+            return;
+        }
+        None => log("XInputGetState not in the game's import table: falling back to an inline hook"),
+    }
     use ilhook::x64::{CallbackOption, HookFlags, hook_closure_retn};
     let mut hooks = Vec::new();
-    for dll in [w!("xinput1_4.dll"), w!("xinput1_3.dll"), w!("xinput9_1_0.dll")] {
-        let module = unsafe { GetModuleHandleW(dll).or_else(|_| LoadLibraryW(dll)) };
-        let Ok(module) = module else { continue };
+    for dll in [w!("xinput1_4.dll"), w!("xinput1_3.dll")] {
+        let Ok(module) = (unsafe { GetModuleHandleW(dll) }) else { continue };
         let Some(proc) = (unsafe { GetProcAddress(module, PCSTR(c"XInputGetState".as_ptr().cast())) }) else {
             continue;
         };
@@ -172,6 +198,58 @@ unsafe fn install_xinput_hooks() {
         }
     }
     std::mem::forget(hooks);
+}
+
+/// Replaces the game executable's import of `name` (or `ordinal`) from any xinput DLL with
+/// `replacement`. Returns (dll name, the pointer that was there).
+unsafe fn patch_import(name: &std::ffi::CStr, ordinal: u16, replacement: usize) -> Option<(String, usize)> {
+    use windows::Win32::System::Memory::{PAGE_PROTECTION_FLAGS, PAGE_READWRITE, VirtualProtect};
+    let base = unsafe { GetModuleHandleW(None) }.ok()?.0 as usize;
+    let u32_at = |a: usize| unsafe { (a as *const u32).read_unaligned() };
+    let nt = base + u32_at(base + 0x3C) as usize;
+    if u32_at(nt) != 0x4550 {
+        return None; // "PE\0\0"
+    }
+    // PE32+: optional header at +0x18, data directories at +0x70 into it; [1] = imports
+    let imports = u32_at(nt + 0x18 + 0x70 + 8) as usize;
+    if imports == 0 {
+        return None;
+    }
+    let mut desc = base + imports;
+    loop {
+        let (lookup, dll_name, iat) = (u32_at(desc) as usize, u32_at(desc + 12) as usize, u32_at(desc + 16) as usize);
+        if dll_name == 0 {
+            return None;
+        }
+        let dll = unsafe { std::ffi::CStr::from_ptr((base + dll_name) as *const std::ffi::c_char) }.to_string_lossy().to_string();
+        if dll.to_ascii_lowercase().starts_with("xinput") {
+            let names = if lookup != 0 { lookup } else { iat };
+            for k in 0.. {
+                let entry = unsafe { ((base + names + k * 8) as *const u64).read_unaligned() };
+                if entry == 0 {
+                    break;
+                }
+                let hit = if entry & (1 << 63) != 0 {
+                    (entry & 0xFFFF) as u16 == ordinal
+                } else {
+                    // IMAGE_IMPORT_BY_NAME: u16 hint, then the name
+                    let n = unsafe { std::ffi::CStr::from_ptr((base + entry as usize + 2) as *const std::ffi::c_char) };
+                    n == name
+                };
+                if hit {
+                    let slot = (base + iat + k * 8) as *mut usize;
+                    let mut old = PAGE_PROTECTION_FLAGS(0);
+                    unsafe { VirtualProtect(slot as *const _, 8, PAGE_READWRITE, &mut old) }.ok()?;
+                    let previous = unsafe { slot.read() };
+                    unsafe { slot.write(replacement) };
+                    let mut back = PAGE_PROTECTION_FLAGS(0);
+                    let _ = unsafe { VirtualProtect(slot as *const _, 8, old, &mut back) };
+                    return Some((dll, previous));
+                }
+            }
+        }
+        desc += 20;
+    }
 }
 
 // ---- Mario --------------------------------------------------------------------------------
