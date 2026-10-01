@@ -27,7 +27,7 @@ You need Elden Ring on Steam and a Super Mario 64 ROM (US version).
 show the mod is loaded. Start a new character, the mod uses its own save file.
 
 **Stuck somewhere?** Press **F7** to lift Mario 1 m. The mod also lifts him by itself when he
-can't move for a few seconds. If that does not work, you might have to fasttravek to a grace.
+can't move for a few seconds. If that does not work, you might have to fasttravel to a grace.
 
 Only tested with an Xbox One controller and with keyboard and mouse.
 
