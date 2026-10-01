@@ -27,7 +27,7 @@ You need Elden Ring on Steam and a Super Mario 64 ROM (US version).
 show the mod is loaded. Start a new character, the mod uses its own save file.
 
 **Stuck somewhere?** Press **F7** to lift Mario 1 m. The mod also lifts him by itself when he
-can't move for a few seconds. If that does not work, you might have to fasttravel to a grace.
+can't move for a few seconds. If that does not work, you might have to fast travel to a grace.
 
 Only tested with an Xbox One controller and with keyboard and mouse.
 
@@ -52,8 +52,35 @@ Only tested with an Xbox One controller and with keyboard and mouse.
   fed with Elden Ring's live Havok collision.
 - The Tarnished stays in the game underneath and follows Mario, so doors, graces, menus, deaths
   and saves keep working.
-- The mod builds against a slightly patched libsm64 (ladder climbing, carrying, dive grabs, head
-  turning, model part export) in a folder next to this one.
+- The mod builds against a slightly patched libsm64,
+  [libsm64-er-mario](https://github.com/deltarooo/libsm64-er-mario) (ladder climbing, carrying,
+  dive grabs, head turning, model part export).
+
+## Building
+
+Windows, with [Rust](https://rustup.rs), Visual Studio Build Tools (C++) and
+[LLVM](https://github.com/llvm/llvm-project/releases) (clang-cl compiles libsm64's C code).
+The two dependencies sit next to this repository:
+
+```
+git clone https://github.com/deltarooo/er-mario
+git clone -b er-mario https://github.com/deltarooo/libsm64-er-mario libsm64
+git clone https://github.com/vswarte/fromsoftware-rs
+git -C fromsoftware-rs checkout 59fbd3b
+cd libsm64
+python import-mario-geo.py
+cd ../er-mario
+.\build.ps1
+```
+
+`build.ps1 -Dist <ER-Mario folder>` also copies the DLL into an ER-Mario folder (it renames
+the old DLL first, so it works while the game is running; the next start loads the new one).
+The release zip is that folder without the generated `package` folder and log.
+
+## License
+
+[MIT](LICENSE). This covers the mod's own code only; Super Mario 64 data comes from the
+player's ROM and nothing of Nintendo's or FromSoftware's is included.
 
 ## Credits
 
