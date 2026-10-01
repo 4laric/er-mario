@@ -23,7 +23,7 @@ You need Elden Ring on Steam and a Super Mario 64 ROM (US version).
    progress (a few seconds), then the game restarts by itself once. On Linux (Proton), or if
    the restart can't happen by itself, the box asks you to quit and start the game again.
 
-That's it, you're Mario. **ER MARIO** and the version in the title screen's bottom left corner
+**ER MARIO** and the version in the title screen's bottom left corner
 show the mod is loaded. Start a new character, the mod uses its own save file.
 
 **Stuck somewhere?** Press **F7** to lift Mario 1 m. The mod also lifts him by itself when he
