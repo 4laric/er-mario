@@ -70,6 +70,9 @@ to blank it out.
   and saves keep working.
 - The `libsm64` folder is libsm64 with a few patches for the mod (ladder climbing, carrying,
   dive grabs, head turning, model part export), compiled into the DLL.
+- After the first-time setup the mod restarts the game once using Windows' rundll32 (it waits
+  for the game to close, then reopens er-mario.me3). If your antivirus objects, just restart
+  the game yourself.
 
 ## Building
 
