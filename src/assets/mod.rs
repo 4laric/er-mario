@@ -1,6 +1,7 @@
-//! Builds the mod's game files on the player's PC: Mario's model, textures and menu icons come from
-//! their own SM64 ROM (none of Nintendo's data ships with the mod), patched into copies of the
-//! game's own files, read straight from its archives.
+//! Builds the mod's game files on the player's PC: Mario's armour model (his mesh from libsm64,
+//! which compiles in the SM64 decompilation's model code), his textures from the player's own SM64
+//! ROM, and the menu icons rendered from both, patched into copies of the game's own files, read
+//! straight from its archives.
 //!
 //! me3 picks up the package folder when the game starts, so a fresh build is used from the next
 //! launch on; until then Mario mode stays off.

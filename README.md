@@ -6,8 +6,11 @@ bosses, Bob-omb style enemy throws, SM64's health meter, coins and Lakitu's came
 
 Work in progress.
 
-No Nintendo data is in this repository or in the mod. Mario's model, textures, sounds and
-icons are built on the player's PC from their own Super Mario 64 ROM (US version). 
+You need your own Super Mario 64 ROM (US version): Mario's textures, sounds, animations and the
+menu icons come from it, built on your PC the first time you play. Like other
+[libsm64](https://github.com/libsm64/libsm64) projects, the mod itself includes Mario's 3D
+model (his mesh) from the public [SM64 decompilation](https://github.com/n64decomp/sm64). This
+repository contains no Nintendo data.
 
 ## Getting started
 
@@ -71,8 +74,9 @@ cd ..
 .\build.ps1
 ```
 
-`import-mario-geo.py` downloads Mario's model code from the SM64 decompilation once; it isn't
-part of this repository.
+`import-mario-geo.py` (libsm64's own setup script) downloads Mario's model code, two files, from
+the SM64 decompilation once and strips their texture data (textures come from the player's ROM).
+The model code isn't part of this repository; it gets compiled into the DLL.
 
 `build.ps1 -Dist <ER-Mario folder>` also copies the DLL into an ER-Mario folder (it renames
 the old DLL first, so it works while the game is running; the next start loads the new one).
@@ -80,9 +84,10 @@ The release zip is that folder without the generated `package` folder and log.
 
 ## License
 
-[MIT](LICENSE). This covers the mod's own code only; Super Mario 64 data comes from the
-player's ROM and nothing of Nintendo's or FromSoftware's is included. The `libsm64` folder keeps
-libsm64's own license, CC0 ([libsm64/LICENSE.md](libsm64/LICENSE.md)).
+[MIT](LICENSE). This covers the mod's own code only, not Super Mario 64's or Elden Ring's
+content: Mario's textures, sounds and animations come from the player's ROM, his mesh from the
+SM64 decompilation (see above), and nothing of FromSoftware's is included. The `libsm64` folder
+keeps libsm64's own license, CC0 ([libsm64/LICENSE.md](libsm64/LICENSE.md)).
 
 ## Credits
 
