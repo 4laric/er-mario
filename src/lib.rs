@@ -572,59 +572,48 @@ fn startup() {
     }
 }
 
-/// Mario's files are built, but me3 only picks up the package folder when the game starts. On
-/// Windows, still before a save is loaded, the game restarts itself through the me3 profile (as
-/// if it were double-clicked); otherwise (Proton, no me3 file association, already in the world)
-/// the setup box asks the player to restart.
+/// Any controller button, trigger, key or mouse button down right now (game window focused).
+fn any_button_down() -> bool {
+    let pad = PAD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .filter(|(_, t)| t.elapsed().as_secs_f32() < 0.25)
+        .is_some_and(|(s, _)| s.Gamepad.wButtons.0 != 0 || s.Gamepad.bLeftTrigger > 100 || s.Gamepad.bRightTrigger > 100);
+    let keys = kbd::focused() && (1..=0xFE).any(|vk| unsafe { GetAsyncKeyState(vk) } as u16 & 0x8000 != 0);
+    pad || keys
+}
+
+/// Mario's files are built, but me3 only picks up the package folder when the game starts: the
+/// player starts the game again themselves. At the title screen the setup box says so and the next
+/// button press closes the game (nothing is saved there; a normal exit would run the whole
+/// shutdown, so the process just ends). Already in the world: the box and a banner ask for a
+/// restart instead.
 fn built_restart() {
-    log("ER Mario built Mario from your ROM; the game has to restart once");
-    let profile = paths::mod_dir().join("er-mario.me3");
-    // (without me3's file association ShellExecute just fails and the box asks for a restart)
-    let can_relaunch = !running_under_wine() && profile.is_file();
-    if can_relaunch && !IN_WORLD.load(Ordering::Relaxed) {
-        for left in (1..=3).rev() {
-            if IN_WORLD.load(Ordering::Relaxed) {
-                break;
-            }
-            hud::set_setup(Some(hud::Setup {
-                title: "Setup complete".into(),
-                progress: Some(1.0),
-                text: format!("Restarting the game in {left} s..."),
-            }));
-            std::thread::sleep(Duration::from_secs(1));
+    log("ER Mario built Mario from your ROM; the game has to be started again once");
+    if !IN_WORLD.load(Ordering::Relaxed) {
+        hud::set_setup(Some(hud::Setup {
+            title: "Setup complete".into(),
+            progress: Some(1.0),
+            text: "Please start the game again with er-mario.me3.\n\nPress any button to close the game.".into(),
+        }));
+        // a press that started after the box appeared (not one held from before)
+        while any_button_down() {
+            std::thread::sleep(Duration::from_millis(50));
         }
-        if !IN_WORLD.load(Ordering::Relaxed) {
-            // Windows' rundll32 runs our `relaunch` (no window): it waits until this game is really
-            // gone (one copy of the game at a time: a new one started while this one still shut down
-            // just quits), then opens the profile like a double-click. This game ends at once: a
-            // normal exit runs the whole shutdown. Nothing is saved at the title screen.
-            use windows::Win32::System::Threading::{
-                CREATE_NO_WINDOW, CreateProcessW, GetCurrentProcess, GetCurrentProcessId, PROCESS_INFORMATION, STARTUPINFOW, TerminateProcess,
-            };
-            let dll = paths::mod_dir().join("er_mario.dll");
-            let system = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
-            let rundll = format!(r"{system}\System32\rundll32.exe");
-            let mut cmd: Vec<u16> =
-                format!("\"{rundll}\" \"{}\",relaunch {} {}", dll.display(), unsafe { GetCurrentProcessId() }, profile.display()).encode_utf16().chain([0]).collect();
-            let si = STARTUPINFOW { cb: std::mem::size_of::<STARTUPINFOW>() as u32, ..Default::default() };
-            let mut pi = PROCESS_INFORMATION::default();
-            let started = unsafe {
-                CreateProcessW(None, Some(windows::core::PWSTR(cmd.as_mut_ptr())), None, None, false, CREATE_NO_WINDOW, None, None, &si, &mut pi)
-            };
-            match started {
-                Ok(()) => {
-                    log("restarting the game through the me3 profile");
-                    let _ = unsafe { TerminateProcess(GetCurrentProcess(), 0) };
-                    std::process::exit(0);
-                }
-                Err(e) => log(format!("could not restart the game ({e})")),
+        while !IN_WORLD.load(Ordering::Relaxed) {
+            if any_button_down() {
+                log("closing the game after the setup");
+                use windows::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+                let _ = unsafe { TerminateProcess(GetCurrentProcess(), 0) };
+                std::process::exit(0);
             }
+            std::thread::sleep(Duration::from_millis(30));
         }
     }
     hud::set_setup(Some(hud::Setup {
         title: "Setup complete".into(),
         progress: None,
-        text: "Restart the game to finish the setup (start it again with the ER-Mario profile).".into(),
+        text: "Please quit and start the game again with er-mario.me3.".into(),
     }));
     // (the box stays until the player is in the world for a while; the banner repeats it there)
     std::thread::spawn(|| {
@@ -635,14 +624,6 @@ fn built_restart() {
         hud::set_setup(None);
     });
     notify("ER Mario setup is complete. Restart the game to finish it.", "RESTART THE GAME TO FINISH THE SETUP");
-}
-
-/// Running under Wine/Proton (Linux): ntdll has wine_get_version.
-fn running_under_wine() -> bool {
-    unsafe { GetModuleHandleW(windows::core::w!("ntdll.dll")) }
-        .ok()
-        .and_then(|ntdll| unsafe { GetProcAddress(ntdll, PCSTR(c"wine_get_version".as_ptr().cast())) })
-        .is_some()
 }
 
 /// A message for the player: logged, and shown as a big banner once they are in the world.
@@ -2683,33 +2664,6 @@ fn frame(data: &FD4TaskData) {
     }
 }
 
-/// rundll32 entry (built_restart): "<game pid> <profile path>". Waits for that game to be gone,
-/// then opens the profile so me3 starts the game again.
-///
-/// # Safety
-/// Called by rundll32 only, with a NUL-terminated command line.
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn relaunchW(_hwnd: usize, _hinst: usize, cmdline: *const u16, _show: i32) {
-    use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
-    use windows::Win32::UI::Shell::ShellExecuteW;
-    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-    if cmdline.is_null() {
-        return;
-    }
-    let line = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(cmdline, (0..).take_while(|&i| *cmdline.add(i) != 0).count()) });
-    let Some((pid, profile)) = line.trim().split_once(' ') else { return };
-    if let Ok(pid) = pid.parse::<u32>() {
-        if let Ok(h) = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) } {
-            unsafe { WaitForSingleObject(h, 30_000) };
-            let _ = unsafe { windows::Win32::Foundation::CloseHandle(h) };
-        }
-    }
-    // (Steam takes a moment to notice the game has closed)
-    std::thread::sleep(Duration::from_secs(2));
-    let file = windows::core::HSTRING::from(profile.trim());
-    unsafe { ShellExecuteW(None, windows::core::w!("open"), &file, None, None, SW_SHOWNORMAL) };
-}
-
 #[unsafe(no_mangle)]
 /// # Safety
 /// Called by the Windows loader only.
@@ -2718,10 +2672,6 @@ pub unsafe extern "C" fn DllMain(hmodule: usize, reason: u32) -> bool {
         return true;
     }
     MODULE.store(hmodule, Ordering::Relaxed);
-    // loaded by rundll32 for `relaunch`: not inside the game, nothing to set up
-    if std::env::current_exe().is_ok_and(|p| p.file_name().is_some_and(|n| n.eq_ignore_ascii_case("rundll32.exe"))) {
-        return true;
-    }
     std::thread::spawn(|| {
         log(format!("er-mario {} loaded", env!("CARGO_PKG_VERSION")));
         let cs_task = CSTaskImp::wait_for_instance(Duration::MAX).unwrap();

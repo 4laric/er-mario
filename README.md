@@ -23,8 +23,8 @@ You need Elden Ring on Steam and a Super Mario 64 ROM (US version).
 3. Put your Super Mario 64 ROM into the **ER-Mario** folder.
 4. Start the game by double-clicking **er-mario.me3**.
 5. The first time, the mod sets itself up from your ROM: a box on the title screen shows the
-   progress (a few seconds), then the game restarts by itself once. On Linux (Proton), or if
-   the restart can't happen by itself, the box asks you to quit and start the game again.
+   progress (a few seconds). When it says **Setup complete**, press any button to close the
+   game, then start it again with **er-mario.me3**. That's only needed once.
 
 **ER MARIO** and the version in the title screen's bottom left corner
 show the mod is loaded. Start a new character, the mod uses its own save file.
@@ -70,9 +70,6 @@ to blank it out.
   and saves keep working.
 - The `libsm64` folder is libsm64 with a few patches for the mod (ladder climbing, carrying,
   dive grabs, head turning, model part export), compiled into the DLL.
-- After the first-time setup the mod restarts the game once using Windows' rundll32 (it waits
-  for the game to close, then reopens er-mario.me3). If your antivirus objects, just restart
-  the game yourself.
 
 ## Building
 
