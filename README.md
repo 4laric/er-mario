@@ -41,6 +41,9 @@ Only tested with an Xbox One controller and with keyboard and mouse.
 - Some big bosses' ragdolls go wild after a throw; the mod stops them early.
 - Mario's shadow can flicker or drop out from some camera angles in sunlight and moonlight.
 - Some hills and rocks have no collision in the game itself; Mario walks into them.
+- With a controller, Mario can sometimes keep flicking between two directions while you
+  move, as if two sticks were steering him. Restart the game and it's gone. It seems to happen
+  when the controller connects or reconnects while the game is already running.
 
 ## How it works
 
