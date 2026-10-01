@@ -18,10 +18,15 @@ You need Elden Ring on Steam and a Super Mario 64 ROM (US version).
    you can write to, like your Documents folder.
 3. Put your Super Mario 64 ROM into the **ER-Mario** folder.
 4. Start the game by double-clicking **er-mario.me3**.
-5. The first time, the mod builds Mario from your ROM. When it says
-   **RESTART THE GAME TO PLAY AS MARIO**, quit and start it again.
+5. The first time, the mod sets itself up from your ROM: a box on the title screen shows the
+   progress (a few seconds), then the game restarts by itself once. On Linux (Proton), or if
+   the restart can't happen by itself, the box asks you to quit and start the game again.
 
-That's it, you're Mario. Start a new character, the mod uses its own save file.
+That's it, you're Mario. **ER MARIO** and the version in the title screen's bottom left corner
+show the mod is loaded. Start a new character, the mod uses its own save file.
+
+**Stuck somewhere?** Press **F7** to lift Mario 1 m. The mod also lifts him by itself when he
+can't move for a few seconds.
 
 Only tested with an Xbox One controller and with keyboard and mouse.
 
@@ -33,6 +38,8 @@ Only tested with an Xbox One controller and with keyboard and mouse.
 - Mario's walk can flicker a little while passing fog walls.
 - Torrent can't be summoned in Mario mode.
 - Some big bosses' ragdolls go wild after a throw; the mod stops them early.
+- Mario's shadow can flicker or drop out from some camera angles in sunlight and moonlight.
+- Some hills and rocks have no collision in the game itself; Mario walks into them.
 
 ## How it works
 
@@ -41,8 +48,8 @@ Only tested with an Xbox One controller and with keyboard and mouse.
   fed with Elden Ring's live Havok collision.
 - The Tarnished stays in the game underneath and follows Mario, so doors, graces, menus, deaths
   and saves keep working.
-- The mod builds against a slightly patched libsm64 (ladder climbing, carrying, head turning,
-  model part export) in a folder next to this one.
+- The mod builds against a slightly patched libsm64 (ladder climbing, carrying, dive grabs, head
+  turning, model part export) in a folder next to this one.
 
 ## Credits
 
