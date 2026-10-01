@@ -991,6 +991,17 @@ fn frame(data: &FD4TaskData) {
                     ph.standing_on_solid_ground
                 ));
             }
+            {
+                use std::sync::atomic::Ordering::Relaxed;
+                let (checks, queries, ns) = (explore::CHECKS.swap(0, Relaxed), explore::QUERIES.swap(0, Relaxed), explore::QUERY_NS.swap(0, Relaxed));
+                let frames = p.frames.max(1) as f64;
+                log(format!(
+                    "perf: memory checks {:.0}/frame, VirtualQuery {:.0}/frame, {:.2} ms/frame",
+                    checks as f64 / frames,
+                    queries as f64 / frames,
+                    ns as f64 / 1e6 / frames
+                ));
+            }
             if p.scans > 0 {
                 let per_frame = |ms: f32| ms / p.frames as f32;
                 log(format!(
