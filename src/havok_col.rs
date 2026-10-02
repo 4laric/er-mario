@@ -502,7 +502,8 @@ impl HavokCollision {
         let body = self.body(i)?;
         let q = Quat::from_xyzw(f32_at(body + 0x80), f32_at(body + 0x84), f32_at(body + 0x88), f32_at(body + 0x8c)).conjugate();
         let p = vec3_at(body + 0x30);
-        (p.is_finite() && q.is_finite() && q.length_squared() > 0.5).then_some((p, q.normalize()))
+        let norm = q.length_squared();
+        (p.is_finite() && q.is_finite() && norm.is_finite() && norm > 0.5).then(|| (p, q.normalize()))
     }
 
     /// Shape address changes when the game reuses a slot; inactive bodies have no shape.
@@ -741,5 +742,10 @@ mod tests {
         assert_ne!(h.shape_of(0), 0x12340);
         unsafe { *((base + 0x30) as *mut f32) = f32::NAN; }
         assert!(h.transform(0).is_none());
+        unsafe {
+            *((base + 0x30) as *mut f32) = 0.0;
+            *((base + 0x8c) as *mut f32) = 0.0;
+        }
+        assert!(h.transform(0).is_none()); // never normalize an invalid/zero quaternion
     }
 }
