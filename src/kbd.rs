@@ -32,7 +32,7 @@ fn hidden(k: u32) -> bool {
         || (crate::ap_cappy::visual().enabled && k == 0x18)
         || (crate::ap_sonic::visual().enabled && (k == 0x16 || k == 0x19))))
         || (!crate::MENU_OPEN.load(Ordering::Relaxed) && crate::skate::enabled() && k == 0x2F)
-        || (!crate::MENU_OPEN.load(Ordering::Relaxed) && crate::skate::visual().mounted && matches!(k, 0x13 | 0x2A | 0x36 | 0x1D | 0x9D))
+        || (!crate::MENU_OPEN.load(Ordering::Relaxed) && crate::skate::visual().mounted && matches!(k, 0x13 | 0x24 | 0x19))
 }
 
 const VK_W: i32 = 0x57;
@@ -85,7 +85,7 @@ pub fn read() -> Option<Keys> {
     Some(Keys {
         skate_toggle: down(0x56),
         skate_ollie: down(0x52),
-        skate_trick: if down(0x11) { 3 } else if down(0x10) { 2 } else { 0 },
+        skate_trick: if down(0x50) { 3 } else if down(0x4A) { 2 } else { 0 },
         stick_x: x / len,
         stick_y: y / len,
         a: down(VK_L) || down(VK_RBUTTON),
@@ -167,7 +167,7 @@ pub unsafe fn install_hooks() {
                 for &k in &HIDDEN {
                     unsafe { *data.add(k as usize) = 0 };
                 }
-                for k in [0x24u32, 0x17, 0x18, 0x16, 0x19, 0x2F, 0x13, 0x2A, 0x36, 0x1D, 0x9D] {
+                for k in [0x24u32, 0x17, 0x18, 0x16, 0x19, 0x2F, 0x13] {
                     if hidden(k) { unsafe { *data.add(k as usize) = 0 }; }
                 }
             }
