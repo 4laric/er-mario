@@ -527,7 +527,7 @@ const TARGET_RADIUS: f32 = 55.0;
 const TARGET_HEIGHT: f32 = 180.0;
 /// Mario's own hitbox radius in SM64 (units) plus a little reach.
 const MARIO_RADIUS: f32 = 45.0;
-/// A punch's reach beyond the target's body (SM64 units), within this cone (cos 50°) in front.
+/// A punch's reach beyond the target's body (SM64 units), within this cone (cos 50Â°) in front.
 const PUNCH_REACH: f32 = 80.0;
 const PUNCH_CONE_COS: f32 = 0.64;
 
