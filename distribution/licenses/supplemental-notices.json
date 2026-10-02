@@ -1,0 +1,4 @@
+{
+  "dasp_sample": {"revision":"97c3bb9b2363c0b46ac1633858bf1054fd02a980","url":"https://github.com/rustaudio/sample/blob/97c3bb9b2363c0b46ac1633858bf1054fd02a980/LICENSE-MIT","file":"dasp_sample-MIT.txt"},
+  "vtable-rs-proc-macros": {"revision":"0edfd898c78e47c02f50a6b711d161852e56d034","url":"https://github.com/tremwil/vtable-rs/blob/0edfd898c78e47c02f50a6b711d161852e56d034/LICENSE","file":"vtable-rs-proc-macros-MIT.txt"}
+}

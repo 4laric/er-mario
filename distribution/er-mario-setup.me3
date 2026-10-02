@@ -1,0 +1,9 @@
+profileVersion = "v1"
+savefile = "ER0000_mario_ap.sl2"
+[[supports]]
+game = "eldenring"
+[[natives]]
+path = "er_mario.dll"
+[[packages]]
+id = "er-mario"
+path = "package"
