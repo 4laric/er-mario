@@ -556,7 +556,7 @@ struct SM64SurfaceCollisionData *resolve_and_return_wall_collisions(Vec3f pos, f
 f32 vec3f_find_ceil(Vec3f pos, f32 height, struct SM64SurfaceCollisionData **ceil) {
     UNUSED f32 unused;
 
-    return find_ceil(pos[0], height + 80.0f, pos[2], ceil);
+    return find_ceil_above_mario(pos[0], pos[1], pos[2], height, ceil);
 }
 
 /**

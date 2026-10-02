@@ -15,6 +15,70 @@ All fixtures are synthetic and require no game assets, ROM or running game.
 
 The Windows workflow compiles and executes these tests before building the release DLL.
 
+## Adjacent wooden stakes (combined playtest report, 2026-10-02)
+
+The user became trapped among wooden stakes after a regular jump; an enemy hit freed Mario.
+The screenshot does not establish which live triangles were involved. A production collision
+query regression reproduces a relevant defect: both triangles on a shared edge use the original
+probe position, applying the same wall push twice and crossing the opposite obstacle.
+Each face now uses the position corrected by the preceding face. The synthetic 70-unit gap
+checks both entry sides, all 24 face orders, repeated collision queries and surface refreshes.
+The test fails before the change and passes afterward; the earlier rock/elevator checks also
+pass. This is a prevention change to the wall solver, not an automatic unstuck adjustment.
+Replaying the reported regular jump in-game remains necessary to confirm this incident is fixed.
+
+## Fog gates
+
+Godrick's arena fog was crossed by walking without Interact. Normal SM64 movement now checks
+its actual segment at chest/head height against live Havok with the existing player movement
+filter before updating the character proxy. A hit clamps horizontal movement on the near side;
+vertical simulation continues. This covers blockers missing from the imported mesh, without
+guessing a new fog collision layer or making a permanent wall after the blocker is removed.
+Actual game-driven entry animations bypass the guard. An unrelated animation change after
+Interact can no longer start follow mode and discard wall collision. Body hits are recomputed
+at the accepted position so rejected movement cannot damage enemies through the barrier.
+
+Portable tests cover live blockers, legitimate entry, removed blockers, jumping/dashing and
+vertical-only movement. Live validation remains required at Godrick: walking/jumping/dashing
+must block before Interact, entry must work after Interact, and defeated-boss passage must stay
+open. Also check normal stairs, sloped ground and elevators for guard false positives.
+
+## Invisible collision after descending the Liurnia cliff
+
+The user reported blocked walking and jumping in southern Liurnia after jumping from the
+post-Godrick cliff and landing with Hover. The screenshot alone cannot identify the surface.
+The production ceiling query had a relevant defect: `vec3f_find_ceil` anchored its search to
+the next floor even when it was far below Mario. A synthetic cliff fixture reproduces a
+downward-facing surface below Mario becoming an overhead obstruction; it fails before the
+fix. The query now starts at the greater of Mario's feet and the candidate floor height.
+Tests also preserve a genuine low roof and ceiling checks above raised landing floors.
+All callers of the existing ceiling helper use this correction. Re-test the reported ledge
+and check real roofs/overhangs in-game before claiming the live incident is resolved.
+
+## Boss throw through arena walls
+
+BOFA remained stuck after being thrown through a solid wall, but returned after a fog-wall
+throw. Carry placement now checks the boss's leading radius against the map. Guided flight
+no longer ignores detected contacts for its first 0.08 seconds. Ragdoll crossings remember the
+near-side contact and restore the root there after the ragdoll settles, before the boss AI
+resumes. The existing rule against disabling a tumbling ragdoll is preserved. Throw rays check
+the player-blocker filter as well as
+the existing terrain filter. The off-map return behavior remains in place.
+
+Portable tests cover radius separation, reverse-direction contacts and very close hits without
+backward teleportation. Live validation must cover carrying/spinning near walls, immediate
+throws into walls, full-speed/ragdoll impacts, ground impacts and fog-boundary throws. Confirm
+impact damage is applied once and the surviving boss resumes the fight on the reachable side.
+
+## Reported live results and upstream port
+
+Alaric confirmed the stakes, stair-railing overhang, southern Liurnia invisible barrier,
+fog-wall blocking and normal Interact entry, and BOFA boss-throw fixes in the combined fork
+playtest (final confirmations on `6d88a08`). Rocks and the previously problematic elevator
+also passed earlier. This upstream port contains only the collision/throw corrections and
+their tests, based on upstream `4308bac`; it preserves upstream's subsequent floor/ceiling
+orientation correction and other 0.3.4 changes. The exact port has not been replayed in-game.
+
 ## In-game validation still required
 
 The reported rock location was unspecified. No Elden Ring session was launched during this

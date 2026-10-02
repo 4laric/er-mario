@@ -113,9 +113,70 @@ static void rock_wall(void) {
     surfaces_unload_all();
 }
 
+static void stake_gap(void) {
+    /* A jump's 35-unit wall probe lands on the shared edge of two triangles.
+     * Both left faces must not apply the same displacement from the original
+     * position: that pushes Mario through the opposite stake at x=70. */
+    const struct SM64Surface stakes[] = {
+        {0, 0, 0, {{0, 0, -200}, {0, 200, 200}, {0, 0, 200}}},
+        {0, 0, 0, {{0, 0, -200}, {0, 200, -200}, {0, 200, 200}}},
+        {0, 0, 0, {{70, 0, -200}, {70, 0, 200}, {70, 200, 200}}},
+        {0, 0, 0, {{70, 0, -200}, {70, 200, 200}, {70, 200, -200}}}
+    };
+    /* Havok refreshes need not enumerate adjacent faces in the same order. */
+    for (int a = 0; a < 4; a++)
+    for (int b = 0; b < 4; b++)
+    for (int c = 0; c < 4; c++)
+    for (int d = 0; d < 4; d++) {
+        if (a == b || a == c || a == d || b == c || b == d || c == d) continue;
+        const struct SM64Surface ordered[] = {stakes[a], stakes[b], stakes[c], stakes[d]};
+        for (int refresh = 0; refresh < 5; refresh++) {
+            surfaces_load_static(ordered, 4);
+            for (int side = 0; side < 2; side++) {
+                float x = side ? 75 : -5, y = 100, z = 0;
+                assert(f32_find_wall_collision(&x, &y, &z, 0, 35) > 0);
+                assert(fabsf(x - 35) < 0.01f);
+                assert(fabsf(z) < 0.01f && y == 100);
+                for (int tick = 0; tick < 10; tick++) {
+                    f32_find_wall_collision(&x, &y, &z, 0, 35);
+                    assert(fabsf(x - 35) < 0.01f);
+                }
+            }
+        }
+    }
+    surfaces_unload_all();
+}
+
+static void ledge_ceiling(void) {
+    const struct SM64Surface valley[] = {
+        {0, 0, 0, {{-500, -1000, -500}, {500, -1000, 500}, {500, -1000, -500}}},
+        {0, 0, 0, {{-500, -200, -500}, {500, -200, -500}, {500, -200, 500}}}
+    };
+    surfaces_load_static(valley, 2);
+    struct SM64SurfaceCollisionData *floor, *ceil;
+    Vec3f pos = {0, 0, 0};
+    float floorHeight = find_floor(pos[0], pos[1], pos[2], &floor);
+    assert(floor && floorHeight == -1000);
+    /* The downward face two metres BELOW Mario is not an overhead obstacle,
+     * even though the next floor is ten metres down across the ledge. */
+    find_ceil_above_mario(pos[0], pos[1], pos[2], floorHeight, &ceil);
+    assert(ceil == NULL);
+    /* A real roof still blocks the jump, including a low head-bonk roof. */
+    const struct SM64Surface roof[] = {
+        {0, 0, 0, {{-500, 100, -500}, {500, 100, -500}, {500, 100, 500}}}
+    };
+    surfaces_load_static(roof, 1);
+    assert(find_ceil_above_mario(0, 0, 0, -1000, &ceil) == 100 && ceil);
+    /* A raised landing floor, rather than the old feet height, is still used. */
+    assert(find_ceil_above_mario(0, -100, 0, 0, &ceil) == 100 && ceil);
+    surfaces_unload_all();
+}
+
 int main(void) {
+    ledge_ceiling();
+    stake_gap();
     rock_wall();
     lifts();
-    puts("rock collision and elevator regression tests passed");
+    puts("ledge ceilings, stake seams, rock collision and elevator regression tests passed");
     return 0;
 }

@@ -279,10 +279,13 @@ static s32 find_wall_collisions_from_list( struct SM64WallCollisionData *data) {
             }
         }
 
-        //! (Wall Overlaps) Because this doesn't update the x and z local variables,
-        //  multiple walls can push mario more than is required.
+        // Resolve subsequent faces from the corrected position. Shared triangle
+        // edges otherwise apply the same push twice and can put Mario inside a
+        // neighbouring prop even during an ordinary jump.
         data->x += surf->normal.x * (radius - offset);
         data->z += surf->normal.z * (radius - offset);
+        x = data->x;
+        z = data->z;
 
         //! (Unreferenced Walls) Since this only returns the first four walls,
         //  this can lead to wall interaction being missed. Typically unreferenced walls
@@ -347,6 +350,14 @@ f32 find_ceil(f32 posX, f32 posY, f32 posZ, struct SM64SurfaceCollisionData **pc
 }
 
 struct SM64FloorCollisionData sFloorGeo;
+
+f32 find_ceil_above_mario(f32 x, f32 marioY, f32 z, f32 floorY, struct SM64SurfaceCollisionData **pceil) {
+    // Across a cliff the queried floor can be far below Mario. Anchoring only
+    // to that floor admits undersides below his feet as phantom ceilings.
+    // Keep the raised-floor check for landing/steps, but never search below him.
+    f32 base = marioY > floorY ? marioY : floorY;
+    return find_ceil(x, base + 80.0f, z, pceil);
+}
 
 f32 find_floor_height_and_data(f32 xPos, f32 yPos, f32 zPos, struct SM64FloorCollisionData **floorGeo)
 {
