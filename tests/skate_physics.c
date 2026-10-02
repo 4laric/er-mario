@@ -11,7 +11,7 @@
 struct ERFludd er_fludd;
 static struct SM64SurfaceCollisionData floor_surface;
 static struct Object object;
-static int ground_calls, air_calls, collision, fall_checks, injury, sounds, cancelled, foot_cues;
+static int ground_calls, air_calls, collision, fall_checks, injury, sounds, cancelled, foot_cues, ground_left;
 u32 set_mario_action(struct MarioState *m,u32 a,u32 arg) {m->action=a;m->actionArg=arg;return 1;}
 void mario_set_forward_vel(struct MarioState *m,f32 speed) {
     float yaw=m->faceAngle[1]*3.14159265358979323846f/32768;
@@ -26,7 +26,7 @@ void er_fludd_input(uint32_t allowed,uint32_t h,uint32_t s,uint32_t c) {
     assert(!allowed&&!h&&!s&&!c);
 }
 s32 perform_ground_step(struct MarioState *m) {
-    ground_calls++;if(!collision){m->pos[0]+=m->vel[0];m->pos[2]+=m->vel[2];}return collision ? collision : GROUND_STEP_NONE;
+    ground_calls++;if(!collision){m->pos[0]+=m->vel[0];m->pos[2]+=m->vel[2];}return ground_left ? GROUND_STEP_LEFT_GROUND : (collision ? collision : GROUND_STEP_NONE);
 }
 s32 perform_air_step(struct MarioState *m,u32 arg) {
     (void)arg;air_calls++;
@@ -116,37 +116,77 @@ int main(void) {
     er_skate_step(&m);assert(er_skate.push_phase==1);
     er_skate_input(1,0,1,1,0,0,0);er_skate_step(&m);assert(!er_skate.push_phase);
     er_skate_input(1,0,0,0,0,0,0);er_skate_step(&m);assert(!er_skate.push_phase);
-    /* Normal ollie, flip and shuvit have identical physics. Only a grounded
-       edge picks the animation, even if the modifier changes while airborne. */
-    float ollie_y=0,ollie_z=0,ollie_vy=0;
-    for(unsigned trick=0;trick<=3;trick++) {
-        if(trick==1)continue;
+    /* A grounded request is ignored even when the same tick takes off. */
+    for(unsigned requested=0;requested<=3;requested++) {
         m=mario();mount(&m);er_skate.speed=30;
         int old_air=air_calls,old_ground=ground_calls;
-        er_skate_input(1,0,1,0,1,0,trick);assert(er_skate_step(&m));
-        assert(air_calls==old_air+1&&ground_calls==old_ground);
-        assert(er_skate.trick==(trick?trick:1)&&er_skate.trick_ticks==1&&!er_skate.push_phase);
-        if(!trick){ollie_y=m.pos[1];ollie_z=m.pos[2];ollie_vy=m.vel[1];}
-        else {assert(m.pos[1]==ollie_y&&m.pos[2]==ollie_z&&m.vel[1]==ollie_vy);}
-        unsigned chosen=er_skate.trick;
-        er_skate_input(1,0,1,0,1,0,chosen==2?3:2);er_skate_step(&m);
-        assert(er_skate.trick==chosen&&er_skate.trick_ticks==2&&m.vel[1]==36);
-        er_skate_input(1,0,1,0,0,0,2);er_skate_step(&m);
-        er_skate_input(1,0,1,0,1,0,3);er_skate_step(&m);
-        assert(er_skate.trick==chosen&&er_skate.trick_ticks==4&&m.vel[1]==28);
-        for(int i=0;i<30;i++)er_skate_step(&m);
+        er_skate_input(1,0,0,0,1,0,requested);er_skate_step(&m);
+        assert(er_skate.trick==1&&!er_skate.trick_used&&er_skate.trick_ticks==1);
+        assert(air_calls==old_air+1&&ground_calls==old_ground&&m.vel[1]==40);
+        er_skate_step(&m);assert(er_skate.trick==1&&m.vel[1]==36);
+    }
+    /* Standalone airborne buttons do not change any impulse or physics step.
+       Compare whole trajectories with a no-trick run, including ordinary tuck. */
+    float trace_y[26],trace_z[26],trace_vy[26],trace_speed[26];
+    for(unsigned selected=0;selected<=3;selected++) {
+        if(selected==1)continue;
+        m=mario();mount(&m);er_skate.speed=30;
+        er_skate_input(1,0,0,0,1,0,0);er_skate_step(&m);
+        for(int tick=0;tick<26;tick++) {
+            int old_air=air_calls,old_ground=ground_calls;
+            er_skate_input(1,0,0,0,0,0,tick>=2?selected:0);
+            float old_vy=m.vel[1];er_skate_step(&m);
+            assert(air_calls==old_air+1&&ground_calls==old_ground&&m.vel[1]==old_vy-4);
+            if(!selected){trace_y[tick]=m.pos[1];trace_z[tick]=m.pos[2];trace_vy[tick]=m.vel[1];trace_speed[tick]=er_skate.speed;}
+            else {
+                assert(m.pos[1]==trace_y[tick]&&m.pos[2]==trace_z[tick]&&m.vel[1]==trace_vy[tick]&&er_skate.speed==trace_speed[tick]);
+                if(tick>=2)assert(er_skate.trick==selected&&er_skate.trick_used);
+                if(tick==2)assert(er_skate.trick_ticks==1);
+            }
+        }
         assert(er_skate.trick_ticks==20&&!er_skate.push_phase);
         float progress=(float)er_skate.trick_ticks/20;
         assert(isfinite(progress)&&progress==1);
+        /* Releasing/repressing either button cannot start a second board trick. */
+        unsigned chosen=er_skate.trick;
+        er_skate_input(1,0,0,0,0,0,0);er_skate_step(&m);
+        er_skate_input(1,0,0,0,0,0,chosen==2?3:2);er_skate_step(&m);
+        if(selected)assert(er_skate.trick==chosen&&er_skate.trick_ticks==20);
         collision=AIR_STEP_LANDED;er_skate_step(&m);collision=0;
-        assert(!er_skate.trick&&!er_skate.trick_ticks&&!er_skate.airborne);
+        assert(!er_skate.trick&&!er_skate.trick_ticks&&!er_skate.trick_used&&!er_skate.airborne);
+        /* The held landing button does not buffer another trick at next takeoff. */
+        er_skate_input(1,0,0,0,1,0,chosen==2?3:2);er_skate_step(&m);
+        assert(er_skate.trick==1&&!er_skate.trick_used);
+        er_skate_step(&m);assert(er_skate.trick==1&&!er_skate.trick_used);
+        er_skate_input(1,0,0,0,0,0,0);er_skate_step(&m);
+        er_skate_input(1,0,0,0,0,0,2);er_skate_step(&m);
+        assert(er_skate.trick==2&&er_skate.trick_used&&er_skate.trick_ticks==1);
     }
-    m=mario();mount(&m);er_skate_input(1,0,0,0,1,0,999);er_skate_step(&m);
-    assert(er_skate.trick==1); /* Unknown modifier is ordinary ollie. */
-    er_skate_input(0,1,1,0,1,1,3);
-    assert(!er_skate.trick&&!er_skate.trick_ticks&&!er_skate.push_phase);
-    m=mario();mount(&m);er_skate_input(1,0,0,0,1,0,2);er_skate_step(&m);
+    /* Rolling off a ledge allows a fresh airborne trick without an ollie. */
+    m=mario();mount(&m);
+    er_skate_input(1,0,0,0,0,0,2);er_skate_step(&m);assert(!er_skate.trick);
+    ground_left=1;er_skate_step(&m);ground_left=0;
+    assert(er_skate.airborne&&!er_skate.trick&&!er_skate.trick_used);
+    er_skate_step(&m);assert(!er_skate.trick); /* Ground-held button stays ignored. */
+    er_skate_input(1,0,0,0,0,0,0);er_skate_step(&m);
+    er_skate_input(1,0,0,0,0,0,3);float old_vy=m.vel[1];er_skate_step(&m);
+    assert(er_skate.trick==3&&er_skate.trick_used&&er_skate.trick_ticks==1&&m.vel[1]==old_vy-4);
+    er_skate_input(0,0,0,0,0,0,2);
+    assert(!er_skate.mounted&&!er_skate.trick_used&&!er_skate.trick_ticks&&!er_skate.push_phase);
+    /* Suspension requires an allowed neutral observation, including across a
+       fresh mount. A held request cannot sneak through loading or menus. */
+    m=mario();er_skate_input(1,0,0,0,0,0,2);assert(!er_skate_step(&m));
+    er_skate_input(1,1,0,0,0,0,2);assert(er_skate_step(&m));
+    er_skate_input(1,0,0,0,1,0,2);er_skate_step(&m);er_skate_step(&m);
+    assert(er_skate.trick==1&&!er_skate.trick_used);
+    er_skate_input(1,0,0,0,0,0,0);er_skate_step(&m);
+    er_skate_input(1,0,0,0,0,0,2);er_skate_step(&m);
+    assert(er_skate.trick==2&&er_skate.trick_ticks==1);
     m.hurtCounter=1;assert(!er_skate_step(&m));
-    assert(!er_skate.mounted&&!er_skate.trick_ticks&&!er_skate.trick&&!er_skate.push_phase);
+    assert(!er_skate.mounted&&!er_skate.trick_ticks&&!er_skate.trick&&!er_skate.trick_used);
+    /* Reset and unknown inputs remain fail-closed and keep OFF parity above. */
+    m=mario();mount(&m);er_skate_input(1,0,0,0,1,0,999);er_skate_step(&m);
+    er_skate_step(&m);assert(er_skate.trick==1&&!er_skate.trick_used);
+    er_skate_reset();assert(er_skate.trick_release&&!er_skate.trick_used);
     return 0;
 }

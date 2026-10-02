@@ -32,7 +32,7 @@ fn hidden(k: u32) -> bool {
         || (crate::ap_cappy::visual().enabled && k == 0x18)
         || (crate::ap_sonic::visual().enabled && (k == 0x16 || k == 0x19))))
         || (!crate::MENU_OPEN.load(Ordering::Relaxed) && crate::skate::enabled() && k == 0x2F)
-        || (!crate::MENU_OPEN.load(Ordering::Relaxed) && crate::skate::visual().mounted && k == 0x13)
+        || (!crate::MENU_OPEN.load(Ordering::Relaxed) && crate::skate::visual().mounted && matches!(k, 0x13 | 0x2A | 0x36 | 0x1D | 0x9D))
 }
 
 const VK_W: i32 = 0x57;
@@ -167,7 +167,7 @@ pub unsafe fn install_hooks() {
                 for &k in &HIDDEN {
                     unsafe { *data.add(k as usize) = 0 };
                 }
-                for k in [0x24u32, 0x17, 0x18, 0x16, 0x19, 0x2F, 0x13] {
+                for k in [0x24u32, 0x17, 0x18, 0x16, 0x19, 0x2F, 0x13, 0x2A, 0x36, 0x1D, 0x9D] {
                     if hidden(k) { unsafe { *data.add(k as usize) = 0 }; }
                 }
             }

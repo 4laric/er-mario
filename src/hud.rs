@@ -504,7 +504,7 @@ impl ImguiRenderLoop for Overlay {
         let board = crate::skate::visual();
         if board.enabled {
             let label = if board.mounted {
-                format!("Skate {:.1} m/s  {}  X ollie / RB flip / LT shuv-it", board.speed * 0.30, match board.trick { 2 => "Kickflip", 3 => "Shuv-it", 1 => "Ollie", _ => "A push / B brake" })
+                format!("Skate {:.1} m/s  {}  X ollie / airborne: RB flip, LT shuv-it", board.speed * 0.30, match board.trick { 2 => "Kickflip", 3 => "Shuv-it", 1 => "Ollie", _ => "A push / B brake" })
             } else if board.bail_ticks > 0 {
                 "Skate: recover before remounting".into()
             } else { "Skate: D-pad Left / V to mount".into() };

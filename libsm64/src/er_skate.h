@@ -8,6 +8,7 @@ struct ERSkate {
     uint32_t toggle_release, ollie_release;
     /* Push phase: 0 idle, 1..24 cycle; trick ticks saturate at20 until landing. */
     uint32_t trick_request, push_phase, trick_ticks;
+    uint32_t previous_trick, trick_release, trick_used;
     float steer, speed, lean;
 };
 extern struct ERSkate er_skate;

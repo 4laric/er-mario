@@ -169,10 +169,14 @@ pub fn skate_pose(parts: &mut [PartPose; PARTS], speed: f32, airborne: bool, lea
     if !airborne && push_phase.is_finite() && push_phase >= 0.0 {
         let phase = push_phase.clamp(0.0,1.0);
         let stroke = (phase * std::f32::consts::PI).sin().max(0.0);
-        let target = parts[12].pos - forward * (0.22 * stroke)
-            - across * (0.10 * stroke) - up * (0.07 * stroke);
+        // Trace an open loop: plant early, sweep back, then visibly lift on the return.
+        let cycle = (phase * std::f32::consts::TAU).sin();
+        let sweep = 0.30 * stroke - 0.11 * cycle;
+        let recovery = 0.12 * (-cycle).max(0.0);
+        let target = parts[12].pos - forward * sweep
+            - across * (0.16 * stroke) + up * (recovery - 0.075 * stroke);
         let planted = parts[15].pos;
-        let balance = -up * (0.10 * stroke) - forward * (0.08 * stroke);
+        let balance = -up * (0.13 * stroke) - forward * (0.11 * stroke);
         let cap_flying = parts[crate::assets::cappy::BARE_HEAD].scale >= 0.01;
         for (i, part) in parts.iter_mut().enumerate().skip(1) {
             if i == crate::assets::addons::BOARD || i == crate::assets::addons::FLASK
@@ -182,8 +186,8 @@ pub fn skate_pose(parts: &mut [PartPose; PARTS], speed: f32, airborne: bool, lea
         skate_leg_target(parts,10,11,12,target,forward);
         skate_leg_target(parts,13,14,15,planted,forward);
         // Counterbalance the pushing leg with a small shoulder and hand motion.
-        for i in [4,5,6] { parts[i].pos += forward * (0.035 * stroke); }
-        for i in [7,8,9] { parts[i].pos -= forward * (0.035 * stroke); }
+        for i in [4,5,6] { parts[i].pos += forward * (0.065 * stroke); }
+        for i in [7,8,9] { parts[i].pos -= forward * (0.065 * stroke); }
     }
     if airborne && matches!(trick,1..=3) && trick_progress.is_finite() {
         let phase = trick_progress.clamp(0.0,1.0);
@@ -321,10 +325,15 @@ mod skate_tests {
             assert!((parts[10].pos.distance(parts[11].pos)-upper).abs()<1e-4);
             assert!((parts[11].pos.distance(parts[12].pos)-lower).abs()<1e-4);
             assert!(parts[15].pos.distance(rest[15].pos)<1e-4);
+            assert!(parts[crate::assets::addons::BOARD].pos.distance(rest[crate::assets::addons::BOARD].pos)<1e-5);
             assert!(parts.iter().all(|p| p.pos.is_finite() && p.rot.is_finite()));
             if phase == 0.5 {
-                assert!(parts[12].pos.z < rest[12].pos.z - 0.05);
+                assert!(parts[12].pos.z < rest[12].pos.z - 0.15);
+                assert!(parts[12].pos.x > rest[12].pos.x + 0.10);
                 assert!(parts[12].pos.y < rest[12].pos.y);
+            }
+            if phase == 0.75 {
+                assert!(parts[12].pos.y > rest[12].pos.y + 0.04);
             }
             if phase == 0.0 || phase == 1.0 || phase < 0.0 || !phase.is_finite() {
                 assert!(parts[12].pos.distance(rest[12].pos)<1e-4);

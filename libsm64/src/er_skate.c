@@ -18,6 +18,8 @@ s32 lava_boost_on_wall(struct MarioState *m);
 static void dismount(void) {
     er_skate.mounted = er_skate.airborne = er_skate.trick = 0;
     er_skate.push_phase = er_skate.trick_ticks = 0;
+    er_skate.trick_used = 0;
+    er_skate.trick_release = 1;
     er_skate.speed = er_skate.lean = 0;
 }
 void er_skate_reset(void) {
@@ -25,7 +27,7 @@ void er_skate_reset(void) {
     memset(&er_skate, 0, sizeof er_skate);
     er_skate.enabled = enabled;
     /* Loading while a button is held must not mount or ollie on return. */
-    er_skate.toggle_release = er_skate.ollie_release = 1;
+    er_skate.toggle_release = er_skate.ollie_release = er_skate.trick_release = 1;
 }
 void er_skate_configure(uint32_t enabled) {
     enabled = !!enabled;
@@ -63,14 +65,18 @@ int er_skate_step(struct MarioState *m) {
         dismount(); er_skate.toggle_release = er_skate.ollie_release = 1;
         er_skate.previous_toggle = er_skate.toggle;
         er_skate.previous_ollie = er_skate.ollie;
+        er_skate.previous_trick = er_skate.trick_request;
         return 0;
     }
     if (!er_skate.toggle) er_skate.toggle_release = 0;
     if (!er_skate.ollie) er_skate.ollie_release = 0;
+    if (!er_skate.trick_request) er_skate.trick_release = 0;
     int toggle = er_skate.toggle && !er_skate.previous_toggle && !er_skate.toggle_release;
     int ollie = er_skate.ollie && !er_skate.previous_ollie && !er_skate.ollie_release;
+    int trick = er_skate.trick_request && !er_skate.previous_trick && !er_skate.trick_release;
     er_skate.previous_toggle = er_skate.toggle;
     er_skate.previous_ollie = er_skate.ollie;
+    er_skate.previous_trick = er_skate.trick_request;
     if (er_skate.bail_ticks) er_skate.bail_ticks--;
     if (toggle && ground && !er_skate.bail_ticks) {
         if (er_skate.mounted) { dismount(); return 0; }
@@ -78,6 +84,13 @@ int er_skate_step(struct MarioState *m) {
         er_skate.speed = fmaxf(0, fminf(90, m->forwardVel));
     }
     if (!er_skate.mounted) return 0;
+    /* Consume edges even on the ground: held buttons cannot buffer a trick
+       for takeoff. One fresh airborne edge changes presentation only. */
+    if ((m->action & ACT_FLAG_AIR) && trick && !er_skate.trick_used) {
+        er_skate.trick = er_skate.trick_request;
+        er_skate.trick_ticks = 0;
+        er_skate.trick_used = 1;
+    }
     /* Skating owns this frame; stale jet/charge visuals and projectile inputs
        cannot claim another step or attack from underneath the board. */
     er_fludd_input(0, 0, 0, 0);
@@ -107,7 +120,7 @@ int er_skate_step(struct MarioState *m) {
             set_mario_action(m, ACT_FREEFALL, 0);
             m->vel[1] = 44; m->peakHeight = m->pos[1];
             er_skate.speed = speed;
-            er_skate.trick = er_skate.trick_request ? er_skate.trick_request : 1;
+            er_skate.trick = 1;
             er_skate.trick_ticks = 0; ground = 0;
             play_sound(SOUND_ACTION_TERRAIN_JUMP + m->terrainSoundAddend, m->marioObj->header.gfx.cameraToObject);
         }
@@ -140,6 +153,7 @@ int er_skate_step(struct MarioState *m) {
             else {
                 set_mario_action(m, ACT_WALKING, 0);
                 er_skate.trick = er_skate.trick_ticks = 0; ground = 1;
+                er_skate.trick_used = 0;
                 play_sound(SOUND_ACTION_TERRAIN_LANDING + m->terrainSoundAddend, m->marioObj->header.gfx.cameraToObject);
             }
         } else if (result == AIR_STEP_HIT_WALL) {

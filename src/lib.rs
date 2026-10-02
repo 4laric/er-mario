@@ -174,7 +174,10 @@ fn xinput_filter(index: u32, state: *mut XINPUT_STATE, rc: u32) -> u32 {
         }
         if ap_cappy::visual().enabled { g.bRightTrigger = 0; }
         if skate::enabled() && !g.wButtons.contains(XINPUT_GAMEPAD_RIGHT_SHOULDER) { g.wButtons &= !XINPUT_GAMEPAD_DPAD_LEFT; }
-        if skate::visual().mounted { g.wButtons &= !XINPUT_GAMEPAD_X; }
+        if skate::visual().mounted {
+            g.wButtons &= !(XINPUT_GAMEPAD_X | XINPUT_GAMEPAD_RIGHT_SHOULDER);
+            g.bLeftTrigger = 0;
+        }
         if ap_sonic::visual().enabled {
             g.wButtons &= !XINPUT_GAMEPAD_LEFT_THUMB;
             g.bLeftTrigger = 0;
@@ -1051,7 +1054,7 @@ fn input_task() {
             || (b.contains(XINPUT_GAMEPAD_X) && (menu || !skate::visual().mounted))
             || b.contains(XINPUT_GAMEPAD_Y)
             || b.contains(XINPUT_GAMEPAD_LEFT_SHOULDER)
-            || (g.bLeftTrigger > 100 && (menu || !ap_sonic::visual().enabled))
+            || (g.bLeftTrigger > 100 && (menu || (!ap_sonic::visual().enabled && !skate::visual().mounted)))
             || (menu && stick);
         right_trigger = g.bRightTrigger;
         opener |= b.contains(XINPUT_GAMEPAD_START) || b.contains(XINPUT_GAMEPAD_BACK);
@@ -1930,7 +1933,7 @@ fn frame(data: &FD4TaskData) {
             skate_push = g.wButtons.contains(XINPUT_GAMEPAD_A);
             skate_brake = g.wButtons.contains(XINPUT_GAMEPAD_B);
             skate_ollie = g.wButtons.contains(XINPUT_GAMEPAD_X);
-            if skate_ollie { skate_trick = if g.bLeftTrigger > 100 { 3 } else if g.wButtons.contains(XINPUT_GAMEPAD_RIGHT_SHOULDER) { 2 } else { 0 }; }
+            skate_trick = if g.bLeftTrigger > 100 { 3 } else if g.wButtons.contains(XINPUT_GAMEPAD_RIGHT_SHOULDER) { 2 } else { 0 };
             skate_steer = -axis(g.sThumbLX);
             cap_held = g.bRightTrigger > 100;
             spin_held = g.wButtons.contains(XINPUT_GAMEPAD_LEFT_THUMB);
@@ -1964,7 +1967,7 @@ fn frame(data: &FD4TaskData) {
                 skate_toggle |= skate::enabled() && k.skate_toggle;
                 skate_push |= k.a;
                 skate_brake |= k.b;
-                if k.skate_ollie && !skate_ollie { skate_trick = k.skate_trick; }
+                if skate_trick == 0 { skate_trick = k.skate_trick; }
                 skate_ollie |= k.skate_ollie;
                 if skate_steer == 0.0 { skate_steer = -k.stick_x; }
                 inputs.button_a |= k.a as u8;

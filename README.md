@@ -171,8 +171,9 @@ Set `skateboard = on` in `er_mario.ini`. **D-pad Left / V** mounts or dismounts
 while safely grounded; **RB + D-pad Left** still selects FLUDD Squirt.
 On the board, hold **A / L / right mouse** to push, use the **left stick / A-D**
 to carve, hold **B / comma / left mouse** to brake, and press **X / R** to ollie.
-Use **RB + X / Shift + R** for a kickflip or **LT + X / Ctrl + R** for a shuv-it.
-Choose the trick when jumping; airborne presses add no lift or speed. Mario pushes
+After takeoff, press **RB / Shift** alone for a kickflip or **LT / Ctrl** alone
+for a shuv-it. One board trick is allowed per airtime; it adds no lift or speed.
+Release trick buttons before takeoff, then press one in midair. Mario pushes
 with his rear foot, then tucks his feet while the board flips or turns beneath him.
 The board carries momentum, accelerates downhill, and uses Mario's native ground
 and airborne collision steps. Landing retains speed. Hits, forced actions, menus
