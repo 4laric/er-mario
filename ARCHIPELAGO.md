@@ -120,9 +120,10 @@ Capacity accepts 4 through 8 wedges, power accepts 7500/10000/12500/15000 basis
 points. Defaults and reset are 8/10000. The setter only queues an atomic snapshot;
 the SM64 worker applies it before jobs and ticks. Clients must wait for both the
 capability and stats acknowledgments when changing both. Health capacity clamps
-current health and pending healing without healing or resurrecting Mario when
+current health without healing or resurrecting Mario when
 capacity increases. Initialization and explicit healing respect the applied
-maximum. All attack shares and enemy/boss throw impacts use the applied power
+maximum. Pending native healing retains its ability to offset damage at full
+health; only actual health is bounded by capacity. All attack shares and enemy/boss throw impacts use the applied power
 multiplier, preserving finisher and minimum damage rules. The meter treats the
 applied capacity as full and displays current/max below eight wedges.
 
