@@ -2124,7 +2124,13 @@ fn frame(data: &FD4TaskData) {
                 let accepted = movement_guard::constrain(
                     m.state.position, state.position,
                     FOLLOWING.load(Ordering::Relaxed) || game_driven(current_anim(&player_ref.chr_ins)),
-                    |start, delta| caster.cast(start, delta),
+                    |start, delta| {
+                        // a removed body (a boss fog wall after the fight) still answers the ray
+                        caster.cast(start, delta).filter(|&h| {
+                            let e = collision::sm_to_er(caster.origin, h);
+                            !havok_col::on_removed_body(glam::Vec3::new(e.0, e.1, e.2))
+                        })
+                    },
                 );
                 if accepted != state.position {
                     set_mario_position(m.id, accepted);
