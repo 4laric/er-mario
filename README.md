@@ -75,12 +75,10 @@ to blank it out.
 
 Windows, with [Rust](https://rustup.rs), Visual Studio Build Tools (C++),
 [LLVM](https://github.com/llvm/llvm-project/releases) (clang-cl compiles libsm64's C code) and
-Python. fromsoftware-rs sits next to this repository:
+Python. Cargo fetches fromsoftware-rs itself (pinned to a commit in `Cargo.toml`):
 
 ```
 git clone https://github.com/deltarooo/er-mario
-git clone https://github.com/vswarte/fromsoftware-rs
-git -C fromsoftware-rs checkout 59fbd3b
 cd er-mario/libsm64
 python import-mario-geo.py
 cd ..
