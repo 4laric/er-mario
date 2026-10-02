@@ -88,3 +88,13 @@ existing pinned sibling fromsoftware-rs source and imported Mario geometry code;
 it does not require a ROM. Runtime assets remain player-supplied. Live game
 compatibility, move controls, region warps, death synchronization, and required
 boss encounters still need Windows gameplay validation.
+
+## Coexisting overlays
+
+The AP client and this fork each statically link hudhook/MinHook. Their hook
+installation must share `Local\ERArchipelagoHudhookInstall.v1`, covering both
+trampoline creation and application. Otherwise overlapping installations can
+both report success while the last installed DLL bypasses the other's overlay.
+The Mario guard uses a 30-second bounded wait and releases its ownership and
+handle on exit. The client must use the same guard. See the independently
+linked [native regression](tests/hudhook_chain/README.md).
