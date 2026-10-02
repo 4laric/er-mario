@@ -10,7 +10,7 @@ const NOZZLES: u64 = 15;
 const EXTERNAL: u64 = 1 << 63;
 static REQUESTED: AtomicU64 = AtomicU64::new(0);
 static APPLIED: AtomicU64 = AtomicU64::new(0);
-static VISUAL: AtomicU64 = AtomicU64::new(60 << 16);
+static VISUAL: AtomicU64 = AtomicU64::new(300 << 24);
 #[repr(C)]
 pub struct FluddState {
     pub abi_version: u32,
@@ -38,8 +38,8 @@ fn decode(v: u64) -> Visual {
         enabled: v & 1 != 0,
         active: v & 2 != 0,
         selected_nozzle: ((v >> 2) & NOZZLES) as u32,
-        water_units: ((v >> 8) & 255) as u32,
-        capacity_units: ((v >> 16) & 255) as u32,
+        water_units: ((v >> 8) & 65535) as u32,
+        capacity_units: ((v >> 24) & 65535) as u32,
     }
 }
 fn requested() -> u64 {
@@ -77,14 +77,14 @@ pub fn publish() {
     unsafe { crate::sm64::sm64_er_fludd_get_state(s.as_mut_ptr()) };
     let r = APPLIED.load(Ordering::Acquire);
     VISUAL.store(
-        ((r >> 8) & NOZZLES) << 24
-            | ((r >> 16) & 3) << 28
-            | ((r >> 63) << 30)
+        ((r >> 8) & NOZZLES) << 40
+            | ((r >> 16) & 3) << 44
+            | ((r >> 63) << 46)
             | u64::from(s[0])
             | (u64::from(s[2] != 0) << 1)
             | (u64::from(s[1]) << 2)
             | (u64::from(s[3]) << 8)
-            | (u64::from(s[4]) << 16),
+            | (u64::from(s[4]) << 24),
         Ordering::Release,
     );
 }
@@ -121,9 +121,9 @@ pub unsafe extern "C" fn er_mario_ap_get_fludd_state(out: *mut FluddState) -> u3
     let packed = VISUAL.load(Ordering::Acquire);
     let v = decode(packed);
     let same = (packed & 1) == (r & 1)
-        && ((packed >> 24) & NOZZLES) == ((r >> 8) & NOZZLES)
-        && ((packed >> 28) & 3) == ((r >> 16) & 3)
-        && ((packed >> 30) & 1) == (r >> 63);
+        && ((packed >> 40) & NOZZLES) == ((r >> 8) & NOZZLES)
+        && ((packed >> 44) & 3) == ((r >> 16) & 3)
+        && ((packed >> 46) & 1) == (r >> 63);
     unsafe {
         out.write(FluddState {
             abi_version: 1,

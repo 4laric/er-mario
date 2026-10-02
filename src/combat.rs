@@ -30,6 +30,7 @@ pub enum Attack {
     Dash,
     Cap,
     Squirt,
+    Hover,
     Sonic,
 }
 
@@ -44,7 +45,7 @@ impl Attack {
             Attack::Stomp => (69, 998, 250, 35.0, 2, 0.8),
             Attack::Dash => (70, 999, 175, 25.0, 2, 0.8),
             // Remote addon hits reuse the existing reaction rows; no new param slots.
-            Attack::Cap | Attack::Squirt => Attack::Punch.spec(),
+            Attack::Cap | Attack::Squirt | Attack::Hover => Attack::Punch.spec(),
             Attack::Sonic => Attack::Dash.spec(),
         }
     }
@@ -59,7 +60,8 @@ impl Attack {
             Attack::Stomp => (50.0, "damage_stomp"),
             Attack::GroundPound => (67.0, "damage_ground_pound"),
             Attack::Cap => (20.0, "damage_cap"),
-            Attack::Squirt => (3.0, "damage_squirt"),
+            Attack::Squirt => (12.0, "damage_squirt"),
+            Attack::Hover => (6.0, "damage_hover"),
             Attack::Sonic => (34.0, "damage_sonic"),
         }
     }
@@ -510,7 +512,7 @@ fn take_share(handle: &FieldInsHandle, attack: Attack) -> bool {
             Attack::Kick | Attack::Sweep => crate::swing::STANCE_KICK,
             Attack::Punch | Attack::Cap => crate::swing::STANCE_PUNCH,
             // A water stream chips HP without repeatedly breaking boss stance.
-            Attack::Squirt => 0.0,
+            Attack::Squirt | Attack::Hover => 0.0,
         });
     }
     let data = &mut chr.modules.data;
@@ -614,7 +616,7 @@ impl Combat {
                 }
                 // a regular enemy punched or dived into from behind: Mario picks it up like a
                 // Bob-omb (carry.rs)
-                let remote = matches!(attack, Attack::Cap | Attack::Squirt | Attack::Sonic);
+                let remote = matches!(attack, Attack::Cap | Attack::Squirt | Attack::Hover | Attack::Sonic);
                 if !remote && (matches!(attack, Attack::Punch) || diving) && liftable(handle) {
                     let me = player.modules.physics.position;
                     if crate::carry::try_pick_up(handle, glam::Vec3::new(me.0, me.1, me.2), target.radius / 100.0, target.height / 100.0) {

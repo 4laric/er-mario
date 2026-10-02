@@ -103,9 +103,23 @@ static void advance_cap(struct MarioState *m, int usable) {
     if (!er_cappy.phase && edge) {
         float yaw=(float)m->faceAngle[1]*(6.28318530718f/65536.0f);
         er_cappy.direction[0]=sinf(yaw); er_cappy.direction[1]=0; er_cappy.direction[2]=cosf(yaw);
+        float momentum[3], length=0;
+        for (int i=0;i<3;i++) {
+            momentum[i]=isfinite(m->vel[i]) ? m->vel[i] : 0;
+            length+=momentum[i]*momentum[i];
+        }
+        length=sqrtf(length);
+        float scale=length>60 ? 60/length : 1;
+        length=0;
+        for (int i=0;i<3;i++) {
+            er_cappy.velocity[i]=er_cappy.direction[i]*33+momentum[i]*scale;
+            length+=er_cappy.velocity[i]*er_cappy.velocity[i];
+        }
+        length=sqrtf(length);
+        if (length>80) for (int i=0;i<3;i++) er_cappy.velocity[i]*=80/length;
         for (int i=0;i<3;i++) er_cappy.position[i]=m->pos[i];
         er_cappy.position[1]+=140; er_cappy.phase=1; er_cappy.age=0;
-    }
+    } else if (er_cappy.phase==1 && edge) er_cappy.phase=2;
     if (!er_cappy.phase) return;
     er_cappy.age++; er_cappy.spin_yaw+=0.45f;
     if (er_cappy.spin_yaw>6.28318530718f) er_cappy.spin_yaw-=6.28318530718f;
@@ -114,9 +128,9 @@ static void advance_cap(struct MarioState *m, int usable) {
     if (distance>800*800) er_cappy.phase=2; /* player can move while the cap hovers */
     if (er_cappy.phase==1) {
         if (er_cappy.age<=12) {
-            float p[3]; for (int i=0;i<3;i++) p[i]=er_cappy.position[i]+er_cappy.direction[i]*33;
+            float p[3]; for (int i=0;i<3;i++) p[i]=er_cappy.position[i]+er_cappy.velocity[i];
             if (!sweep_cap(p)) er_cappy.phase=2;
-        } else if (!er_cappy.held || er_cappy.age>=60) er_cappy.phase=2;
+        } else if (er_cappy.age>=60) er_cappy.phase=2;
     }
     if (er_cappy.phase==2) {
         float d[3], length=0; for(int i=0;i<3;i++) { d[i]=m->pos[i]-er_cappy.position[i]; if(i==1)d[i]+=140; length+=d[i]*d[i]; }
@@ -131,7 +145,11 @@ static int move(struct MarioState *m,int ground) {
     if (!er_sonic.feedback_request)
         set_mario_animation(m,ground ? MARIO_ANIM_RUNNING : MARIO_ANIM_GENERAL_FALL);
     if (ground) {
+        float speed=m->forwardVel;
         if (!er_sonic.feedback_request || m->action != ACT_WALKING) set_mario_action(m,ACT_WALKING,0);
+        /* Walking initialization imposes a minimum speed from the stick. Charge
+           owns its acceleration, so retain the speed chosen before the transition. */
+        if (er_sonic.feedback_request==SONIC_CHARGE) mario_set_forward_vel(m,speed);
         int r=perform_ground_step(m);
         if(r==GROUND_STEP_LEFT_GROUND) { set_mario_action(m,ACT_FREEFALL,0); }
         else if(r==GROUND_STEP_HIT_WALL) { mario_set_forward_vel(m,0); cancel_sonic(); }
@@ -236,7 +254,14 @@ void er_addons_after(struct MarioState *m) {
        its frame intact; the renderer advances it normally once per Mario tick. */
     if (sonic_animation_saved && visual == SONIC_CHARGE)
         m->marioObj->header.gfx.animInfo = sonic_animation;
-    set_mario_animation(m, MARIO_ANIM_FORWARD_SPINNING);
+    /* 16.16 frames/tick: Spin charge ramps from 1x to 3x at its 30-tick
+       maximum. Changing acceleration preserves the ongoing animation frame. */
+    s32 rate=0x10000;
+    if (visual==SONIC_CHARGE && er_sonic.spin_charge) {
+        uint32_t charge=er_sonic.spin_charge>30 ? 30 : er_sonic.spin_charge;
+        rate+=(s32)((charge-1)*0x20000/29);
+    }
+    set_mario_anim_with_accel(m, MARIO_ANIM_FORWARD_SPINNING, rate);
     if (!er_sonic.feedback_ticks
         || (visual != SONIC_AIR_DASH && er_sonic.feedback_ticks % 12 == 0))
         play_sound(visual == SONIC_CHARGE ? SOUND_ACTION_TWIRL : SOUND_ACTION_SPIN,

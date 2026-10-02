@@ -2217,6 +2217,11 @@ fn frame(data: &FD4TaskData) {
                             engine_mario::clip_squirt_stream(parts, fraction);
                             (start, clipped)
                         });
+                    let hover = parts.as_mut().filter(|_| water.enabled && water.active && water.selected_nozzle == ap_fludd::HOVER)
+                        .map(|parts| engine_mario::hover_segments(parts, state.position).map(|(start, end)| {
+                            let delta = std::array::from_fn(|i| end[i] - start[i]);
+                            (start, caster.cast(start, delta).unwrap_or(end))
+                        }));
                     let cap = ap_cappy::visual();
                     let sonic = ap_sonic::visual();
                     let addon_targets: Vec<_> = targets.iter().enumerate().map(|(index, t)| addon_hitboxes::Target {
@@ -2225,7 +2230,7 @@ fn frame(data: &FD4TaskData) {
                     let frame = addon_hitboxes::Frame {
                         tick: m.ticks, mario_previous: m.state.position, mario_current: state.position,
                         cap: (cap.enabled && cap.flying).then_some(cap.position),
-                        sonic_burst: (sonic.enabled && sonic.attack_state != 0).then_some(sonic.attack_generation), squirt,
+                        sonic_burst: (sonic.enabled && sonic.attack_state != 0).then_some(sonic.attack_generation), squirt, hover,
                     };
                     let addon = m.addon_hits.step(frame, &addon_targets, |start, contact| {
                         let delta = glam::Vec3::from_array(contact) - glam::Vec3::from_array(start);
@@ -2237,6 +2242,7 @@ fn frame(data: &FD4TaskData) {
                     let mut addon_damage: Vec<_> = addon.into_iter().map(|(i, kind)| (i, match kind {
                         addon_hitboxes::Kind::Cap => combat::Attack::Cap,
                         addon_hitboxes::Kind::Squirt => combat::Attack::Squirt,
+                        addon_hitboxes::Kind::Hover => combat::Attack::Hover,
                         addon_hitboxes::Kind::Sonic => combat::Attack::Sonic,
                     }, false)).collect();
                     addon_damage.append(&mut hits);

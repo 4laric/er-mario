@@ -107,8 +107,10 @@ pub fn relative_parts(mats: &[f32], count: i32, mario: [f32; 3], eye_cell: u8, p
     } else {
         head
     };
-    out[crate::assets::cappy::CAP] = cap;
-    out[crate::assets::cappy::EYES] = PartPose { scale: if cappy.enabled { cap.scale } else { 0.001 }, ..cap };
+    let (capped, flying_cap, bare) = crate::assets::cappy::shown_parts(cappy.flying);
+    out[HEAD] = PartPose { scale: if capped { head.scale } else { 0.001 }, ..head };
+    out[crate::assets::cappy::CAP] = PartPose { scale: if flying_cap { cap.scale } else { 0.001 }, ..cap };
+    out[crate::assets::cappy::BARE_HEAD] = PartPose { scale: if bare { head.scale } else { 0.001 }, ..head };
     Some(out)
 }
 
@@ -121,12 +123,22 @@ fn squirt_stream_pose(torso: PartPose) -> PartPose {
 
 /// The damage beam uses the exact endpoints of the displayed nozzle stream.
 pub fn squirt_segment(parts: &[PartPose; PARTS], mario: [f32; 3]) -> ([f32; 3], [f32; 3]) {
-    let jet = parts[crate::assets::fludd::TURBO_JET];
+    jet_segment(parts[crate::assets::fludd::TURBO_JET], mario,
+        crate::assets::fludd::STREAM_MOUTH, crate::assets::fludd::STREAM_END)
+}
+
+/// Both downward Hover jets follow their rendered torso pose.
+pub fn hover_segments(parts: &[PartPose; PARTS], mario: [f32; 3]) -> [([f32; 3], [f32; 3]); 2] {
+    std::array::from_fn(|i| jet_segment(parts[crate::assets::fludd::JETS], mario,
+        crate::assets::fludd::HOVER_MOUTHS[i], crate::assets::fludd::HOVER_ENDS[i]))
+}
+
+fn jet_segment(jet: PartPose, mario: [f32; 3], start: [f32; 3], end: [f32; 3]) -> ([f32; 3], [f32; 3]) {
     let to_sm = |local: [f32; 3]| {
         let world = (jet.pos + jet.rot * Vec3::from_array(local) * jet.scale) / crate::SCALE;
         [mario[0] - world.x, mario[1] + world.y, mario[2] + world.z]
     };
-    (to_sm(crate::assets::fludd::STREAM_MOUTH), to_sm(crate::assets::fludd::STREAM_END))
+    (to_sm(start), to_sm(end))
 }
 
 /// Keep the water mesh on the nozzle while shortening it at a map obstruction.
@@ -152,6 +164,23 @@ pub fn blend(a: &[PartPose; PARTS], b: &[PartPose; PARTS], t: f32) -> [PartPose;
 #[cfg(test)]
 mod squirt_tests {
     use super::*;
+    #[test]
+    fn hover_hitboxes_follow_both_rendered_jets_at_every_yaw() {
+        for yaw in [0.0, 0.7, -1.4] {
+            // Native torso local -X points up.
+            let axes = Mat3::from_cols(-Vec3::Y, Vec3::Z, -Vec3::X);
+            let torso = PartPose { rot: Quat::from_rotation_y(yaw) * Quat::from_mat3(&axes), pos: Vec3::new(0.1, 0.8, -0.2), scale: 1.0 };
+            let parts = [torso; PARTS];
+            let jets = hover_segments(&parts, [100.0, 200.0, -400.0]);
+            for (start, end) in jets {
+                assert!((start[1] - end[1] - 100.0).abs() < 0.001);
+                assert!((start[0] - end[0]).abs() < 0.001);
+                assert!((start[2] - end[2]).abs() < 0.001);
+            }
+            assert!((Vec3::from_array(jets[0].0).distance(Vec3::from_array(jets[1].0)) - 32.0).abs() < 0.001);
+        }
+    }
+
     #[test]
     fn enlarged_spray_keeps_its_mouth_at_the_nozzle_and_hitbox_at_the_visible_tip() {
         for yaw in [0.0, 0.7, -1.4] {

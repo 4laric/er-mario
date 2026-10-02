@@ -26,7 +26,7 @@ int main(void) {
     assert(!air_calls && !ground_calls && !sound_calls); /* OFF parity: native state untouched */
     er_fludd_configure(1,7,0); er_fludd_reset(); er_fludd_input(1,1,1,0);
     assert(er_fludd_step(&m)==1 && air_calls==1 && ground_calls==0);
-    assert(m.pos[1]==5 && m.vel[1]==1 && er_fludd.water==59);
+    assert(m.pos[1]==5 && m.vel[1]==1 && er_fludd.water==299);
     assert(sound_calls==1 && last_sound==SOUND_ENV_WATERFALL2);
     er_fludd_after(&m); assert(m.peakHeight==m.floorHeight);
     /* Every refusal leaves movement to the existing native action dispatcher. */
@@ -48,8 +48,9 @@ int main(void) {
     int sounds=sound_calls;
     for (int t=0;t<29;t++) { assert(!er_fludd_step(&m)); assert(last_sound==SOUND_AIR_BLOW_WIND); }
     assert(sound_calls==sounds+29);
-    assert(er_fludd_step(&m) && m.pos[1]==110 && m.vel[1]==106 && !er_fludd.water);
+    assert(er_fludd_step(&m) && m.pos[1]==110 && m.vel[1]==106 && er_fludd.water==240);
     assert(last_sound==SOUND_ACTION_FLYING_FAST);
+    er_fludd.water=0;
     sounds=sound_calls; assert(!er_fludd_step(&m) && sound_calls==sounds); /* Empty tank is silent. */
     m=before; er_fludd_reset(); er_fludd_input(1,1,4,0);
     for (int t=0;t<19;t++) { assert(!er_fludd_step(&m)); assert(last_sound==SOUND_AIR_BLOW_WIND); }
@@ -80,8 +81,23 @@ int main(void) {
         sounds=sound_calls;
         assert(!er_fludd_step(&m) && !memcmp(&m,&snapshot,sizeof m));
         assert(air_calls+ground_calls==calls && !er_fludd.protected_fall);
-        assert(er_fludd.active==8 && er_fludd.water==59-airborne);
+        assert(er_fludd.active==8 && er_fludd.water==299u-(uint32_t)airborne);
         assert(sound_calls==sounds+1 && last_sound==SOUND_ENV_WATERFALL2);
     }
+    /* Walking recharges without consuming a movement step or changing Mario.
+       Airborne, unsafe and suspended states still cannot manufacture water. */
+    m=before; m.action=ACT_WALKING; m.forwardVel=25;
+    er_fludd.water=290; er_fludd_input(1,0,8,0);
+    struct MarioState snapshot=m; int calls=air_calls+ground_calls;
+    assert(!er_fludd_step(&m) && er_fludd.water==291 && !memcmp(&m,&snapshot,sizeof m));
+    assert(air_calls+ground_calls==calls);
+    m.action=ACT_FREEFALL; m.pos[1]=100;
+    assert(!er_fludd_step(&m) && er_fludd.water==291);
+    m=before; m.hurtCounter=1;
+    assert(!er_fludd_step(&m) && er_fludd.water==291);
+    m=before; er_fludd_input(0,0,8,0);
+    assert(!er_fludd_step(&m) && er_fludd.water==291);
+    er_fludd_input(1,1,8,0);
+    assert(!er_fludd_step(&m) && er_fludd.water==290); /* Active grounded spray spends fuel. */
     return 0;
 }

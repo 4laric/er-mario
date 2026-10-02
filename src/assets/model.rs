@@ -94,8 +94,8 @@ pub fn export(geo: &mut sm64::Geometry, atlas: Vec<u8>) -> Option<MarioModel> {
         tick(geo);
     }
     let (c, parts) = capture();
-    let mut model_tris = tris(&c, geo, |part| part != 3);
-    if !model_tris
+    let capped_tris = tris(&c, geo, |_| true);
+    if !capped_tris
         .iter()
         .any(|tri| tri.part == super::cappy::CAP as i32)
     {
@@ -105,13 +105,17 @@ pub fn export(geo: &mut sm64::Geometry, atlas: Vec<u8>) -> Option<MarioModel> {
     let matrices = (0..parts)
         .map(|p| c.mats[p * 16..p * 16 + 16].try_into().unwrap())
         .collect();
-    // Replace the capped head with its own uncapped variant; the adapter exports the
-    // original hat separately as part 28. This keeps one face and one detachable cap.
+    // Export both native heads. The original capped head is visible at rest;
+    // the uncapped variant replaces it only while the native cap flies.
     // Setup-only flags: retain the normal cap, and restore it before the star dance.
     unsafe { sm64::sm64_set_mario_state(id, 0x00000001) };
     tick(geo);
     let (bare, _) = capture();
-    model_tris.extend(tris(&bare, geo, |part| part == 3));
+    let bare_tris = tris(&bare, geo, |part| part == 3);
+    let Some(model_tris) = super::cappy::native_heads(&capped_tris, &bare_tris) else {
+        unsafe { sm64::sm64_mario_delete(id) };
+        return None;
+    };
     unsafe { sm64::sm64_set_mario_state(id, 0x00000011) };
     // the star dance (the same Mario two ticks later, like a fresh one after five)
     for _ in 0..1 {

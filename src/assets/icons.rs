@@ -28,10 +28,9 @@ struct RTri {
     textured: bool,
 }
 
-// The detachable hat still belongs to the head icon and uses its captured matrix.
-// Part 28 has no independent SM64 matrix; only the engine renderer animates it.
+// The resting native head already includes its cap. Flight-only parts are excluded.
 fn icon_part(part: i32) -> i32 {
-    if part == super::cappy::CAP as i32 { 3 } else { part }
+    part
 }
 
 fn prepare(model: &MarioModel, t: &Tri) -> RTri {

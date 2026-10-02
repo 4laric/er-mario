@@ -50,11 +50,12 @@ Hold **RB** to use the selected nozzle. While holding RB, **D-pad Up** selects H
 On keyboard, hold **J** to use FLUDD and press **I** to cycle nozzles. Rocket and Turbo
 charge before firing; ordinary jump, attack and crouch inputs take priority.
 
-The HUD shows the selected nozzle and water remaining. Release FLUDD and stand still
-on the ground to refill gradually; resting at a grace or respawning refills the tank.
-AP tank upgrades increase capacity from 60 to 80, 100 and 120 without refilling water.
+The HUD shows the selected nozzle and water remaining. Release FLUDD while safely
+grounded to refill gradually, including while walking; resting at a grace or respawning
+refills the tank. Airborne movement and active nozzles do not refill water. The base tank
+holds 300 water; AP tank upgrades add 100 each, reaching 400, 500 and 600 without refilling water.
 Squirt sprays forward while ordinary movement continues; its short stream damages nearby
-targets and stops at map geometry. The current AP item pool unlocks the three traversal
+targets and stops at map geometry. Hover jets can damage targets below Mario. The current AP item pool unlocks the three traversal
 nozzles; Squirt is available in standalone play. Jets, charging and launches use SM64 audio.
 
 The backpack adds generated model parts. On the first start with this build, allow
@@ -67,14 +68,18 @@ Archipelago seeds use `mario_cappy` and `mario_sonic_movement`; all options defa
 and can coexist with FLUDD. These development builds keep Mario's appearance and add
 original movement implementations inspired by Odyssey and Sonic.
 
-**Cappy:** press **RT** or **O** to throw the cap. Hold to hover briefly, then release
-to recall it; it also returns automatically. Land on the deployed cap while descending
+**Cappy:** tap **RT** or **O** to throw the cap; tap again to recall it early.
+It stays deployed on its own timer and then returns automatically. Throws retain Mario's
+movement momentum. Land on the deployed cap while descending
 to bounce. One cap bounce is available per real landing on the ground. AP seeds unlock
-Cap Throw and Cap Bounce separately. The cap has eyes and leaves Mario's head when
-thrown. Its swept hitbox damages each target once per throw. Enemy capture is not included.
+Cap Throw and Cap Bounce separately. Mario keeps his original SM64 capped head at rest
+and switches to his native uncapped head while the original cap flies, without added eyes.
+Its swept hitbox damages each target once per throw. Enemy capture is not included.
 
-**Sonic movement:** hold **Left Stick Click** or **U** while grounded to charge Spin
-Dash, then release. Hold it in the air to charge Drop Dash for the next landing. Press
+**Sonic movement:** hold **Left Stick Click** or **U** while stationary on the ground
+to charge Spin Dash, then release. Its spinning charge animation ramps from 1x to a
+maximum of 3x speed; Mario does not drift during charging. Hold it in the air to charge
+Drop Dash for the next landing. Press
 **Right Stick Click** or **P** to Air Dash once per airtime; landing on the ground
 restores it. Cap bounces and FLUDD do not restore the aerial moves. AP seeds unlock
 the three moves separately. Charge and dash use a spinning animation and SM64 sounds.
@@ -82,9 +87,10 @@ Only actual dash movement damages targets, once per target per burst; charging d
 Homing attack is not included.
 
 Addon damage follows ordinary Mario combat, including boss scaling, AP damage upgrades,
-enemy hit reactions and kill credit. Defaults are 20% for the cap, 3% per Squirt hit (at
-most once every 12 simulation ticks), and 34% for Sonic dashes, relative to a normal enemy's
-maximum HP. `damage_cap`, `damage_squirt` and `damage_sonic` in `er_mario.ini` override these
+enemy hit reactions and kill credit. Defaults are 20% for the cap, 12% per Squirt hit,
+6% per Hover-jet hit (water hits repeat
+at most once every 12 simulation ticks), and 34% for Sonic dashes, relative to a normal enemy's
+maximum HP. `damage_cap`, `damage_squirt`, `damage_hover` and `damage_sonic` in `er_mario.ini` override these
 percentages. Addon hits never initiate enemy or boss grabs.
 
 Menus, loss of focus, death and incompatible actions cancel addon input. The AP console

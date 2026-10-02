@@ -55,24 +55,31 @@ mod sm64 {
         SONIC.lock().unwrap()[2] = 4;
     }
     pub unsafe fn sm64_er_sonic_get_attack_state(out: *mut u32) {
-        unsafe { *out = SONIC.lock().unwrap()[2] & 12; *out.add(1) = 1; }
+        unsafe {
+            *out = SONIC.lock().unwrap()[2] & 12;
+            *out.add(1) = 1;
+        }
     }
 
     use super::*;
-    static FLUDD: std::sync::Mutex<[u32; 5]> = std::sync::Mutex::new([0, 0, 0, 0, 60]);
+    static FLUDD: std::sync::Mutex<[u32; 5]> = std::sync::Mutex::new([0, 0, 0, 0, 300]);
     pub unsafe fn sm64_er_fludd_configure(enabled: u32, mask: u32, level: u32) {
         let mut s = FLUDD.lock().unwrap();
         s[0] = enabled;
         if s[1] & mask == 0 {
             s[1] = mask & mask.wrapping_neg();
         }
-        s[4] = 60 + 20 * level;
+        s[4] = 300 + 100 * level;
         s[3] = s[3].min(s[4]);
         if enabled == 0 {
             s[1] = 0;
             s[2] = 0;
             s[3] = 0;
         }
+    }
+    pub fn refill_fludd() {
+        let mut s = FLUDD.lock().unwrap();
+        s[3] = s[4];
     }
     pub unsafe fn sm64_er_fludd_get_state(out: *mut u32) {
         unsafe { std::ptr::copy_nonoverlapping(FLUDD.lock().unwrap().as_ptr(), out, 5) };
@@ -308,13 +315,22 @@ fn fludd_abi_is_additive_validated_and_worker_acknowledged() {
                     s.tank_level,
                     s.capacity_units
                 ),
-                (6, mask, tier, 60 + 20 * tier)
+                (6, mask, tier, 300 + 100 * tier)
             );
             assert_eq!(s.selected_nozzle & !mask, 0);
             assert_eq!(er_mario_ap_set_fludd(1, mask, tier), 1);
             apply();
-            assert_eq!(visual().capacity_units, 60 + 20 * tier);
+            assert_eq!(visual().capacity_units, 300 + 100 * tier);
             assert!(visual().enabled && !visual().active);
+            // Fuel above 255 must not overlap capacity or acknowledgement bits.
+            sm64::refill_fludd();
+            publish();
+            unsafe { er_mario_ap_get_fludd_state(&mut s) };
+            assert_eq!(
+                (s.water_units, s.capacity_units, s.flags & 6),
+                (300 + 100 * tier, 300 + 100 * tier, 6)
+            );
+            assert_eq!(visual().water_units, 300 + 100 * tier);
         }
     }
     assert_eq!(er_mario_ap_set_fludd(0, 0, 0), 1);
@@ -327,7 +343,7 @@ fn fludd_abi_is_additive_validated_and_worker_acknowledged() {
             s.water_units,
             s.capacity_units
         ),
-        (4, 0, 0, 60)
+        (4, 0, 0, 300)
     );
 }
 
