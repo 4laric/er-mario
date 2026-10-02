@@ -1,0 +1,59 @@
+name: Archipelago Mario build
+
+on:
+  push:
+    branches: [master, 'codex/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: er-mario
+      - uses: actions/checkout@v4
+        with:
+          repository: vswarte/fromsoftware-rs
+          ref: 59fbd3b3b7daaf14aca47c9f73530493dba6bc79
+          path: fromsoftware-rs
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Import public model source (no ROM)
+        working-directory: er-mario/libsm64
+        run: python import-mario-geo.py
+      - name: Build and test
+        working-directory: er-mario
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
+          $env:CC_x86_64_pc_windows_msvc = 'clang-cl'
+          clang-cl --version
+          rustc --edition=2024 --test tests/ap_bridge.rs -o ap_bridge_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./ap_bridge_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          clang-cl /Ilibsm64/src /Ilibsm64/src/decomp/include /Ishim /DGBI_FLOATS /DVERSION_US tests/ap_actions.c libsm64/src/ap_capabilities.c /Fe:ap_actions_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./ap_actions_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --locked --release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload experimental DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: er-mario-archipelago-${{ github.sha }}
+          path: er-mario/target/x86_64-pc-windows-msvc/release/er_mario.dll
+          if-no-files-found: error
