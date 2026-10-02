@@ -70,6 +70,15 @@ backward teleportation. Live validation must cover carrying/spinning near walls,
 throws into walls, full-speed/ragdoll impacts, ground impacts and fog-boundary throws. Confirm
 impact damage is applied once and the surviving boss resumes the fight on the reachable side.
 
+## Reported live results and upstream port
+
+Alaric confirmed the stakes, stair-railing overhang, southern Liurnia invisible barrier,
+fog-wall blocking and normal Interact entry, and BOFA boss-throw fixes in the combined fork
+playtest (final confirmations on `6d88a08`). Rocks and the previously problematic elevator
+also passed earlier. This upstream port contains only the collision/throw corrections and
+their tests, based on upstream `4308bac`; it preserves upstream's subsequent floor/ceiling
+orientation correction and other 0.3.4 changes. The exact port has not been replayed in-game.
+
 ## In-game validation still required
 
 The reported rock location was unspecified. No Elden Ring session was launched during this
