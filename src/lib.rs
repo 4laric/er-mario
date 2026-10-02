@@ -22,6 +22,7 @@ mod input_policy;
 mod addon_hitboxes;
 mod collision_geometry;
 mod movement_guard;
+mod throw_collision;
 mod names;
 mod paths;
 mod sm64;
@@ -1653,7 +1654,8 @@ fn frame(data: &FD4TaskData) {
             let h = havok?;
             let d = to - from;
             h.phys_world
-                .cast_ray(RAY_FILTER, &HavokPosition(from.x, from.y, from.z, 0.0), eldenring::position::PositionDelta(d.x, d.y, d.z), player_ref)
+                .cast_ray(PLAYER_MOVE_FILTER, &HavokPosition(from.x, from.y, from.z, 0.0), eldenring::position::PositionDelta(d.x, d.y, d.z), player_ref)
+                .or_else(|| h.phys_world.cast_ray(RAY_FILTER, &HavokPosition(from.x, from.y, from.z, 0.0), eldenring::position::PositionDelta(d.x, d.y, d.z), player_ref))
                 .map(|h| glam::Vec3::new(h.0, h.1, h.2))
         });
         if let Some((boss, pct)) = impact {
