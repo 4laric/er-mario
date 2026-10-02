@@ -94,6 +94,8 @@ pub struct HavokCollision {
     /// bodies skipped for not being in the physics world (diagnostics)
     pub not_in_world: u32,
     queries: u32,
+    /// box shapes made thicker (fog gates, see `thicken_thin_wall`)
+    thick: std::collections::HashSet<usize>,
 }
 
 fn u32_at(a: usize) -> u32 {
@@ -338,58 +340,30 @@ pub fn dump_layer_near(center: Vec3, range: f32, layer: u32) -> Vec<String> {
     out
 }
 
-/// Whether `p` lies on or in a body the game has taken out of the world (broadphase id u32::MAX),
-/// like a boss fog wall after the fight. The game's raycasts still hit those; the player doesn't.
-pub fn on_removed_body(p: Vec3) -> bool {
-    let Some(havok) = unsafe { CSHavokMan::instance() }.ok() else { return false };
-    let base = havok as *const CSHavokMan as usize;
-    let Some(world) = read_u64(base + 0x98).and_then(|pw| read_u64(pw as usize + 0x8)) else { return false };
-    let world = world as usize;
-    let Some(bodies) = read_u64(world + 0x28) else { return false };
-    let bodies = bodies as usize;
-    let count = (u32_at(world + 0x30) as usize).min(262_144);
-    if !readable(bodies, count * 0xb0) {
-        return false;
-    }
-    for i in 0..count {
-        let body = bodies + i * 0xb0;
-        let shape = unsafe { *((body + 0x60) as *const usize) };
-        if shape == 0 || u32_at(body + 0x78) != u32::MAX {
-            continue;
-        }
-        let t = vec3_at(body + 0x30);
-        if !t.is_finite() || (t - p).length() > 12.0 {
-            continue;
-        }
-        let Some(tris) = decode_convex(shape) else { continue };
-        if tris.is_empty() {
-            continue;
-        }
-        let q = Quat::from_xyzw(f32_at(body + 0x80), f32_at(body + 0x84), f32_at(body + 0x88), f32_at(body + 0x8c)).conjugate();
-        if !q.is_finite() || q.length_squared() < 0.5 {
-            continue;
-        }
-        let q = q.normalize();
-        let local = q.inverse() * (p - t);
-        let mid = tris.iter().flatten().copied().sum::<Vec3>() / (tris.len() * 3) as f32;
-        // inside the hull or within half a metre of it (the game's ray reports these hits ~0.45 m
-        // before the face): never further out than that from any face
-        let inside = tris.iter().all(|[a, b, c]| {
-            let n = (*b - *a).cross(*c - *a);
-            let len = n.length();
-            if len < 1e-6 {
-                return true;
+/// Fog gates are boxes ~14 cm thick. SM64 only pushes Mario out of a wall while he's within his
+/// radius of it, so at running speed he got deep enough for the back face to push him through.
+/// A box that's thin along a horizontal local axis (local y is up) and wide along the other gets
+/// 1.2 m thick (0.6 m still let him run through); floors and ordinary boxes aren't touched.
+/// Going through a fog with interact leaves him inside the thicker box: see `out_of_thick_wall`.
+fn thicken_thin_wall(tris: &mut [Tri]) -> bool {
+    const THIN: f32 = 0.4;
+    let v = tris.iter().flatten();
+    let lo = v.clone().fold(Vec3::splat(f32::MAX), |a, b| a.min(*b));
+    let hi = v.fold(Vec3::splat(f32::MIN), |a, b| a.max(*b));
+    let size = hi - lo;
+    let mid = (lo + hi) / 2.0;
+    for (axis, other) in [(0, 2), (2, 0)] {
+        if size[axis] < THIN && size[other] > 1.0 && size[1] > 1.0 {
+            for p in tris.iter_mut().flatten() {
+                p[axis] = if p[axis] > mid[axis] { mid[axis] + THICK_WALL / 2.0 } else { mid[axis] - THICK_WALL / 2.0 };
             }
-            let n = n / len;
-            let side = n.dot(local - *a);
-            if n.dot(mid - *a) > 0.0 { side > -0.5 } else { side < 0.5 }
-        });
-        if inside {
             return true;
         }
     }
     false
 }
+
+const THICK_WALL: f32 = 1.2;
 
 /// Breakable things near `center`: (body index, origin, layer). Physics props (layer 0x1e: loose
 /// barrels, pots) have their origin at the centre of mass; map assets (0x3a: crates and barrels
@@ -592,6 +566,32 @@ impl HavokCollision {
         Self { layers, ..Default::default() }
     }
 
+    /// If `p` is inside a thickened wall (a fog gate he just went through), the point just
+    /// outside it on the side `p` is on.
+    pub fn out_of_thick_wall(&self, p: Vec3) -> Option<Vec3> {
+        for i in 0..self.body_count {
+            let body = self.bodies + i * 0xb0;
+            let shape = unsafe { *((body + 0x60) as *const usize) };
+            if !self.thick.contains(&shape) || u32_at(body + 0x78) == u32::MAX {
+                continue;
+            }
+            let Some((_, Some(mesh))) = self.convex.get(&shape) else { continue };
+            let Some((t, q)) = self.transform(i as u32) else { continue };
+            let v = mesh.tris().iter().flatten();
+            let lo = v.clone().fold(Vec3::splat(f32::MAX), |a, b| a.min(*b));
+            let hi = v.fold(Vec3::splat(f32::MIN), |a, b| a.max(*b));
+            let mut l = q.inverse() * (p - t);
+            if l.cmplt(lo - Vec3::Y * 0.5).any() || l.cmpgt(hi).any() {
+                continue;
+            }
+            let axis = if hi.x - lo.x < hi.z - lo.z { 0 } else { 2 };
+            let mid = (lo[axis] + hi[axis]) / 2.0;
+            l[axis] = if l[axis] > mid { hi[axis] + 0.1 } else { lo[axis] - 0.1 };
+            return Some(q * l + t);
+        }
+        None
+    }
+
     /// World-space (Havok) triangles near `center` from all allowed bodies.
     pub fn query(&mut self, center: Vec3) -> Option<Vec<(Tri, u32, u32)>> {
         let havok = unsafe { CSHavokMan::instance() }.ok()?;
@@ -668,7 +668,11 @@ impl HavokCollision {
                     }
                     let cls = class_of(shape).unwrap_or_default();
                     if cls.contains("ConvexPolytopeShape") || cls.contains("BoxShape") || cls.contains("CylinderShape") {
-                        let m = decode_convex(shape).filter(|t| !t.is_empty()).map(|t| Arc::new(Mesh::new(t)));
+                        let mut tris = decode_convex(shape).filter(|t| !t.is_empty());
+                        if cls.contains("BoxShape") && tris.as_mut().is_some_and(|t| thicken_thin_wall(t)) {
+                            self.thick.insert(shape);
+                        }
+                        let m = tris.map(|t| Arc::new(Mesh::new(t)));
                         self.meshes.remove(&shape);
                         self.convex.insert(shape, (vtable, m.clone()));
                         m
@@ -776,6 +780,20 @@ impl HavokCollision {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thin_upright_box_gets_thick() {
+        let (lo, hi) = (Vec3::new(-7.5, 0.0, -0.07), Vec3::new(7.5, 8.3, 0.07));
+        let c = |x: bool, y: bool, z: bool| Vec3::new(if x { hi.x } else { lo.x }, if y { hi.y } else { lo.y }, if z { hi.z } else { lo.z });
+        let mut tris = vec![[c(false, false, false), c(true, false, false), c(true, true, true)], [c(false, true, true), c(true, true, false), c(false, false, true)]];
+        assert!(thicken_thin_wall(&mut tris));
+        assert!(tris.iter().flatten().all(|v| (v.z.abs() - THICK_WALL / 2.0).abs() < 1e-5));
+        // a thin floor plank stays as it is
+        let mut plank = vec![[Vec3::ZERO, Vec3::new(2.0, 0.05, 0.0), Vec3::new(0.0, 0.0, 2.0)]];
+        let before = plank.clone();
+        assert!(!thicken_thin_wall(&mut plank));
+        assert_eq!(plank, before);
+    }
 
     #[test]
     fn tracked_body_reads_reject_removed_and_reused_slots() {
