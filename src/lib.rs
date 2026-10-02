@@ -754,7 +754,9 @@ fn havok_surfaces(h: &mut havok_col::HavokCollision, origin: [f32; 3], mario: [f
         crate::dlog(format!("  per body confirmed/picked: {}", rows.join(", ")));
     }
     if tris.is_empty() {
-        return None;
+        // A lift may be the only nearby geometry. Its surface object supplies the floor;
+        // raycast fallback here would recreate a stationary copy of the moving deck.
+        return (!h.exclude.is_empty()).then(Vec::new);
     }
     let mut out = Vec::with_capacity(tris.len());
     let m = glam::Vec3::from(mario);
@@ -1928,7 +1930,7 @@ fn frame(data: &FD4TaskData) {
             }
             if continue_tick {
                 // nothing to do: keep the loaded surfaces
-            } else if surfaces.is_empty() {
+            } else if surfaces.is_empty() && !from_havok {
                 m.no_ground += 1;
             } else {
                 m.no_ground = 0;

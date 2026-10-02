@@ -7,6 +7,7 @@ face indices become outward, and quantized degenerate triangles are dropped.
 `collision_platforms.c` links the production surface loader, collision queries, platform
 displacement and matrix routines. It checks a leaning rock wall and its triangle seam across
 static refreshes; static-to-object floor ties and rider attachment; the first lift movement;
+dynamic-only floor continuity after removing all static surfaces;
 100 rising/descending steps with displacements exceeding the floor query's 78-unit buffer;
 stopping, translation plus rotation, jumping away, platform deletion and slot reuse.
 The workflow also runs the Rust reflected-platform rotation test through `cargo test`.
