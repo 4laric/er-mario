@@ -21,6 +21,28 @@ pub const COLORS: [[f32; 4]; 4] = [
 pub const SWATCH_Y: usize = 1536;
 pub const SWATCH_X: [usize; 4] = [192, 576, 960, 1344];
 
+/// Hidden attachment bones must never scale a different rendered part through its ancestry.
+/// Check the player's actual skeleton before producing an armour package.
+pub fn safe_attachment_hierarchy(parents: &[i16], parts: &[usize]) -> bool {
+    if parts.len() <= BODY || parts.iter().any(|&b| b >= parents.len()) {
+        return false;
+    }
+    let attachments = &parts[BODY..];
+    for &bone in &parts[1..] {
+        let mut parent = parents[bone];
+        let mut steps = 0;
+        while parent >= 0 {
+            let p = parent as usize;
+            if p >= parents.len() || attachments.contains(&p) || steps >= parents.len() {
+                return false;
+            }
+            parent = parents[p];
+            steps += 1;
+        }
+    }
+    true
+}
+
 fn face(
     verts: &mut Vec<Vertex>,
     tris: &mut Vec<[u16; 3]>,
@@ -167,6 +189,19 @@ pub fn append(verts: &mut Vec<Vertex>, tris: &mut Vec<[u16; 3]>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hidden_attachment_ancestors_are_rejected_before_asset_build() {
+        // A rendered torso on bone 2 and an attachment on spare leaf bone 3.
+        let mut parts = vec![2; BODY];
+        parts[0] = 0;
+        parts.push(3);
+        assert!(safe_attachment_hierarchy(&[-1, 0, 1, 0], &parts));
+        parts[BODY] = 1; // hiding this ancestor would also scale the torso
+        assert!(!safe_attachment_hierarchy(&[-1, 0, 1, 0], &parts));
+        parts[BODY] = 3;
+        assert!(!safe_attachment_hierarchy(&[-1, 0, 1, 3], &parts)); // cyclic attachment
+        assert!(!safe_attachment_hierarchy(&[-1, 9, 1, 0], &parts)); // invalid parent
+    }
     #[test]
     fn geometry_fits_existing_armour_and_has_outward_faces() {
         let (mut verts, mut tris) = (Vec::new(), Vec::new());

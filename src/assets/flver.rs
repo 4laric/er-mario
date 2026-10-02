@@ -9,15 +9,37 @@ use super::model::{MarioModel, Tri};
 
 /// SM64 part -> FLVER bone (bones the chest piece skins natively); same list as engine_mario.rs.
 pub const PART_BONES: [&str; 28] = [
-    "", "Pelvis_Mantle", "Spine2", "Neck", "L_ShoulderArmor", "L_Pectoral", "Collar", "R_Shoulder", "R_Pectoral",
-    "Spine2_Mantle", "L_Hip", "SpineArmor1", "Spine_Mantle", "R_Hip", "SpineArmor2", "L_Shoulder",
+    "",
+    "Pelvis_Mantle",
+    "Spine2",
+    "Neck",
+    "L_ShoulderArmor",
+    "L_Pectoral",
+    "Collar",
+    "R_Shoulder",
+    "R_Pectoral",
+    "Spine2_Mantle",
+    "L_Hip",
+    "SpineArmor1",
+    "Spine_Mantle",
+    "R_Hip",
+    "SpineArmor2",
+    "L_Shoulder",
     // eye variants (open, half, closed, dead)
-    "L_UpArmTwist", "L_Elbow", "L_ForeArmTwist", "L_ForeArmTwist1",
+    "L_UpArmTwist",
+    "L_Elbow",
+    "L_ForeArmTwist",
+    "L_ForeArmTwist1",
     // the peace-sign right hand (star dance)
     "R_Elbow",
     // Original FLUDD body, three nozzle variants and water streams.
-    "R_ForeArmTwist", "R_ForeArmTwist1", "R_UpArmTwist", "R_UpArmTwist1", "L_UpArmTwist1",
-    "L_Clavicle", "R_Clavicle",
+    "R_ForeArmTwist",
+    "R_ForeArmTwist1",
+    "R_UpArmTwist",
+    "R_UpArmTwist1",
+    "L_UpArmTwist1",
+    "L_Thigh_Skirt",
+    "R_Thigh_Skirt",
 ];
 /// SM64 units -> metres, times Mario's 0.25 model scale
 const UNIT: f64 = 0.01 * 0.25;
@@ -88,7 +110,8 @@ impl Flver {
         }
         let d = &data;
         let c = |o: usize| u32_at(d, o) as usize;
-        let (data_off, dummies, materials, bones, meshes, _vbufs) = (c(0x0C), c(0x14), c(0x18), c(0x1C), c(0x20), c(0x24));
+        let (data_off, dummies, materials, bones, meshes, _vbufs) =
+            (c(0x0C), c(0x14), c(0x18), c(0x1C), c(0x20), c(0x24));
         let facesets = c(0x50);
         let mut p = 0x80 + dummies * 0x40 + materials * 0x20;
         let bone_off = p;
@@ -100,12 +123,29 @@ impl Flver {
         let vbuf_off = p;
         p += c(0x24) * 0x20;
         let layout_off = p;
-        Ok(Self { d: data, data_off, bone_off, mesh_off, faceset_off, vbuf_off, layout_off, bones, meshes, facesets })
+        Ok(Self {
+            d: data,
+            data_off,
+            bone_off,
+            mesh_off,
+            faceset_off,
+            vbuf_off,
+            layout_off,
+            bones,
+            meshes,
+            facesets,
+        })
     }
 
     fn bone_names(&self) -> Vec<String> {
         (0..self.bones)
-            .map(|i| super::bnd4::wstr(&self.d, i32_at(&self.d, self.bone_off + i * 0x80 + 12) as usize).unwrap_or_default())
+            .map(|i| {
+                super::bnd4::wstr(
+                    &self.d,
+                    i32_at(&self.d, self.bone_off + i * 0x80 + 12) as usize,
+                )
+                .unwrap_or_default()
+            })
             .collect()
     }
 
@@ -126,17 +166,30 @@ impl Flver {
     fn vertex_buffers(&self, i: usize) -> VertexBuffer {
         let a = self.vbuf_off + i * 0x20;
         let v = |k: usize| i32_at(&self.d, a + k * 4) as usize;
-        VertexBuffer { layout: v(1), vsize: v(2), vcount: v(3), length: v(6), offset: self.data_off + v(7) }
+        VertexBuffer {
+            layout: v(1),
+            vsize: v(2),
+            vcount: v(3),
+            length: v(6),
+            offset: self.data_off + v(7),
+        }
     }
 
     /// (offset, type, semantic) of a layout's members
     fn layout_members(&self, layout: usize) -> Vec<(i32, i32, i32)> {
         let a = self.layout_off + layout * 0x10;
-        let (n, members) = (i32_at(&self.d, a) as usize, i32_at(&self.d, a + 12) as usize);
+        let (n, members) = (
+            i32_at(&self.d, a) as usize,
+            i32_at(&self.d, a + 12) as usize,
+        );
         (0..n)
             .map(|k| {
                 let m = members + k * 0x14;
-                (i32_at(&self.d, m + 4), i32_at(&self.d, m + 8), i32_at(&self.d, m + 12))
+                (
+                    i32_at(&self.d, m + 4),
+                    i32_at(&self.d, m + 8),
+                    i32_at(&self.d, m + 12),
+                )
             })
             .collect()
     }
@@ -145,8 +198,17 @@ impl Flver {
         (0..self.meshes)
             .map(|i| {
                 let a = self.mesh_off + i * 0x30;
-                let list = |n: usize, off: usize| (0..i32_at(&self.d, a + n) as usize).map(|k| i32_at(&self.d, i32_at(&self.d, a + off) as usize + k * 4) as usize).collect();
-                Mesh { facesets: list(0x20, 0x24), vbufs: list(0x28, 0x2C) }
+                let list = |n: usize, off: usize| {
+                    (0..i32_at(&self.d, a + n) as usize)
+                        .map(|k| {
+                            i32_at(&self.d, i32_at(&self.d, a + off) as usize + k * 4) as usize
+                        })
+                        .collect()
+                };
+                Mesh {
+                    facesets: list(0x20, 0x24),
+                    vbufs: list(0x28, 0x2C),
+                }
             })
             .collect()
     }
@@ -182,8 +244,17 @@ pub fn mario_colors(model: &MarioModel) -> Vec<[i32; 3]> {
     set
 }
 
-fn mario_uv(colors: &[[i32; 3]], color: [f32; 3], uv: [f32; 2], textured: bool, cell: usize) -> [f64; 2] {
-    let k = colors.iter().position(|c| *c == color_key(color)).unwrap_or(0) as f64;
+fn mario_uv(
+    colors: &[[i32; 3]],
+    color: [f32; 3],
+    uv: [f32; 2],
+    textured: bool,
+    cell: usize,
+) -> [f64; 2] {
+    let k = colors
+        .iter()
+        .position(|c| *c == color_key(color))
+        .unwrap_or(0) as f64;
     if !textured {
         return [(k * 340.0 + 168.0) / TEX, 1824.0 / TEX];
     }
@@ -206,7 +277,9 @@ pub struct Vertex {
 pub fn textured(t: &Tri) -> bool {
     (0..2).any(|c| {
         let vals = t.uv.map(|uv| uv[c]);
-        let (lo, hi) = vals.iter().fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+        let (lo, hi) = vals
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
         hi - lo > 1e-4
     })
 }
@@ -219,7 +292,11 @@ pub fn mean_u(t: &Tri) -> f32 {
 /// bone, the mod shows the one SM64 draws), the peace hand on its own bone.
 pub fn mario_vertices(model: &MarioModel) -> (Vec<Vertex>, Vec<[u16; 3]>) {
     let colors = mario_colors(model);
-    let all = model.tris.iter().map(|t| (t, t.part as usize)).chain(model.peace.iter().map(|t| (t, PEACE_PART)));
+    let all = model
+        .tris
+        .iter()
+        .map(|t| (t, t.part as usize))
+        .chain(model.peace.iter().map(|t| (t, PEACE_PART)));
     let mut verts: Vec<Vertex> = Vec::new();
     let mut index: HashMap<(usize, [i64; 3], [i64; 2]), usize> = HashMap::new();
     let mut tris = Vec::new();
@@ -229,22 +306,46 @@ pub fn mario_vertices(model: &MarioModel) -> (Vec<Vertex>, Vec<[u16; 3]>) {
         let cells = CELLS as f32;
         // the export caught Mario mid-blink: its eye triangles use the closed-eyes texture (cell 7)
         let eye = tex && part == 3 && 5.5 / cells <= mu && mu < 8.0 / cells;
-        let cell = if eye { 7 } else { (mu * cells).clamp(0.0, cells - 1.0) as usize };
-        let copies: Vec<(usize, Option<usize>)> =
-            if eye { EYE_PARTS.iter().zip(EYE_CELLS).map(|(&p, c)| (p, Some(c))).collect() } else { vec![(part, None)] };
+        let cell = if eye {
+            7
+        } else {
+            (mu * cells).clamp(0.0, cells - 1.0) as usize
+        };
+        let copies: Vec<(usize, Option<usize>)> = if eye {
+            EYE_PARTS
+                .iter()
+                .zip(EYE_CELLS)
+                .map(|(&p, c)| (p, Some(c)))
+                .collect()
+        } else {
+            vec![(part, None)]
+        };
         for (owner, eye_cell) in copies {
             let mut tri = [0u16; 3];
             for k in 0..3 {
                 let l = t.local[k];
                 // SM64 is mirrored on X
-                let p = [-(l[0] as f64) * UNIT, l[1] as f64 * UNIT, l[2] as f64 * UNIT];
+                let p = [
+                    -(l[0] as f64) * UNIT,
+                    l[1] as f64 * UNIT,
+                    l[2] as f64 * UNIT,
+                ];
                 let mut uv = mario_uv(&colors, t.color[0], t.uv[k], tex, cell);
                 if let Some(c) = eye_cell {
                     uv[0] += (c as f64 - 7.0) * TILE as f64 / TEX;
                 }
-                let key = (owner, p.map(|v| round_even(v * 1e5) as i64), uv.map(|v| round_even(v * 1e4) as i64));
+                let key = (
+                    owner,
+                    p.map(|v| round_even(v * 1e5) as i64),
+                    uv.map(|v| round_even(v * 1e4) as i64),
+                );
                 let i = *index.entry(key).or_insert_with(|| {
-                    verts.push(Vertex { pos: p, normal: [0.0; 3], uv, part: owner });
+                    verts.push(Vertex {
+                        pos: p,
+                        normal: [0.0; 3],
+                        uv,
+                        part: owner,
+                    });
                     verts.len() - 1
                 });
                 let n = t.normal[k];
@@ -272,7 +373,11 @@ fn normalize(v: [f64; 3]) -> [f64; 3] {
 }
 
 fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
 }
 
 fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
@@ -292,15 +397,22 @@ fn front_winding(f: &Flver, vb: &VertexBuffer, fs: &Faceset) -> Option<f64> {
     let vert = |i: usize| -> Option<([f64; 3], [f64; 3])> {
         let o = vb.offset + i * vb.vsize;
         (i < vb.vcount).then(|| {
-            let p = [0, 1, 2].map(|k| f32::from_le_bytes(f.d[o + k * 4..o + k * 4 + 4].try_into().unwrap()) as f64);
+            let p = [0, 1, 2].map(|k| {
+                f32::from_le_bytes(f.d[o + k * 4..o + k * 4 + 4].try_into().unwrap()) as f64
+            });
             let n = [0, 1, 2].map(|k| (f.d[o + 12 + k] as f64 - 127.0) / 127.0);
             (p, n)
         })
     };
-    let idx: Vec<usize> = f.d[fs.offset..fs.offset + fs.count * 2].chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]]) as usize).collect();
+    let idx: Vec<usize> = f.d[fs.offset..fs.offset + fs.count * 2]
+        .chunks(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]) as usize)
+        .collect();
     let (mut along, mut against) = (0, 0);
     for t in idx.chunks(3).filter(|t| t.len() == 3) {
-        let (Some(a), Some(b), Some(c)) = (vert(t[0]), vert(t[1]), vert(t[2])) else { continue };
+        let (Some(a), Some(b), Some(c)) = (vert(t[0]), vert(t[1]), vert(t[2])) else {
+            continue;
+        };
         let face = cross(sub(b.0, a.0), sub(c.0, a.0));
         let n = [0, 1, 2].map(|k| a.1[k] + b.1[k] + c.1[k]);
         let d = dot(face, n);
@@ -318,9 +430,24 @@ pub fn build_mario(mut f: Flver, model: &MarioModel, target: usize) -> Result<Ve
     let names = f.bone_names();
     let bone_ids = PART_BONES
         .iter()
-        .map(|n| if n.is_empty() { Some(0) } else { names.iter().position(|b| b == n) })
+        .map(|n| {
+            if n.is_empty() {
+                Some(0)
+            } else {
+                names.iter().position(|b| b == n)
+            }
+        })
         .collect::<Option<Vec<usize>>>()
         .ok_or("the chest piece's skeleton is not the expected one")?;
+    let parents: Vec<i16> = (0..f.bones)
+        .map(|b| {
+            let a = f.bone_off + b * 0x80 + 0x1C;
+            i16::from_le_bytes(f.d[a..a + 2].try_into().unwrap())
+        })
+        .collect();
+    if !super::fludd::safe_attachment_hierarchy(&parents, &bone_ids) {
+        return Err("FLUDD attachment bones must not be ancestors of rendered parts".into());
+    }
     // identity binds, so the hierarchy composes to identity for our bones
     for b in 0..f.bones {
         let a = f.bone_off + b * 0x80;
@@ -331,7 +458,10 @@ pub fn build_mario(mut f: Flver, model: &MarioModel, target: usize) -> Result<Ve
     for &b in &bone_ids[1..] {
         let a = f.bone_off + b * 0x80;
         if i32_at(&f.d, a + 0x3C) != 8 {
-            return Err(format!("bone {} is not skinned by the chest piece", names[b]));
+            return Err(format!(
+                "bone {} is not skinned by the chest piece",
+                names[b]
+            ));
         }
         put_f32s(&mut f.d, a + 0x30, &[-1.0; 3]);
         put_f32s(&mut f.d, a + 0x40, &[1.0; 3]);
@@ -349,13 +479,24 @@ pub fn build_mario(mut f: Flver, model: &MarioModel, target: usize) -> Result<Ve
     let (verts, tris) = mario_vertices(model);
     let vb = f.vertex_buffers(mesh.vbufs[0]);
     let members = f.layout_members(vb.layout);
-    const EXPECTED: [(i32, i32, i32); 7] = [(0, 2, 0), (12, 17, 3), (16, 17, 6), (20, 17, 2), (24, 19, 1), (28, 19, 10), (32, 22, 5)];
+    const EXPECTED: [(i32, i32, i32); 7] = [
+        (0, 2, 0),
+        (12, 17, 3),
+        (16, 17, 6),
+        (20, 17, 2),
+        (24, 19, 1),
+        (28, 19, 10),
+        (32, 22, 5),
+    ];
     if vb.vsize != 40 || members.get(..7) != Some(&EXPECTED[..]) || verts.len() > vb.vcount {
         return Err("the chest piece's vertex layout is not the expected one".into());
     }
     // every triangle faces the way the game's front faces do (SM64's are mirrored on X), so back
     // faces can be culled like on the armour itself
-    let winding = mesh.facesets.first().and_then(|&fi| front_winding(&f, &vb, &fsets[fi]));
+    let winding = mesh
+        .facesets
+        .first()
+        .and_then(|&fi| front_winding(&f, &vb, &fsets[fi]));
     let mut tris = tris;
     if let Some(w) = winding {
         for t in &mut tris {
@@ -370,7 +511,11 @@ pub fn build_mario(mut f: Flver, model: &MarioModel, target: usize) -> Result<Ve
     let mut buf = Vec::with_capacity(vb.vcount * 40);
     for v in &verts {
         let n = normalize(v.normal);
-        let t = normalize(if n[1].abs() < 0.9 { cross(n, [0.0, 1.0, 0.0]) } else { cross(n, [1.0, 0.0, 0.0]) });
+        let t = normalize(if n[1].abs() < 0.9 {
+            cross(n, [0.0, 1.0, 0.0])
+        } else {
+            cross(n, [1.0, 0.0, 0.0])
+        });
         for p in v.pos {
             buf.extend_from_slice(&(p as f32).to_le_bytes());
         }
@@ -381,7 +526,10 @@ pub fn build_mario(mut f: Flver, model: &MarioModel, target: usize) -> Result<Ve
         buf.extend_from_slice(&[bone_ids[v.part] as u8, 0, 0, 0, 255, 0, 0, 0]);
         // same as the armour's own vertices (the shader reads G/B as blend masks)
         buf.extend_from_slice(&[255, 0, 0, 255]);
-        let (u, w) = (round_even(v.uv[0] * TEX) as i16, round_even(v.uv[1] * TEX) as i16);
+        let (u, w) = (
+            round_even(v.uv[0] * TEX) as i16,
+            round_even(v.uv[1] * TEX) as i16,
+        );
         for x in [u, w, u, w] {
             buf.extend_from_slice(&x.to_le_bytes());
         }
@@ -395,11 +543,19 @@ pub fn build_mario(mut f: Flver, model: &MarioModel, target: usize) -> Result<Ve
         return Err("vertex buffer size mismatch".into());
     }
     f.d[vb.offset..vb.offset + vb.length].copy_from_slice(&buf);
-    let idx: Vec<u8> = tris.iter().flatten().flat_map(|i| i.to_le_bytes()).collect();
+    let idx: Vec<u8> = tris
+        .iter()
+        .flatten()
+        .flat_map(|i| i.to_le_bytes())
+        .collect();
     // Mario goes into the biggest faceset (LOD 0); the smaller LODs can't hold him, so their headers
     // point at that same index data: whichever LOD the game draws (shadows use lower ones, picked
     // by distance and angle), it is all of Mario (empty, they left him without one)
-    let full = *mesh.facesets.iter().max_by_key(|&&fi| fsets[fi].count).ok_or("chest piece mesh has no facesets")?;
+    let full = *mesh
+        .facesets
+        .iter()
+        .max_by_key(|&&fi| fsets[fi].count)
+        .ok_or("chest piece mesh has no facesets")?;
     let fs = &fsets[full];
     if idx.len() > fs.length {
         return Err("Mario does not fit in the chest piece's index buffer".into());
@@ -414,6 +570,10 @@ pub fn build_mario(mut f: Flver, model: &MarioModel, target: usize) -> Result<Ve
         f.d[h + 12..h + 16].copy_from_slice(&offset.to_le_bytes());
         f.d[h + 16..h + 20].copy_from_slice(&(fs.length as i32).to_le_bytes());
     }
-    crate::log(format!("assets: Mario mesh {} vertices, {} triangles", verts.len(), tris.len()));
+    crate::log(format!(
+        "assets: Mario mesh {} vertices, {} triangles",
+        verts.len(),
+        tris.len()
+    ));
     Ok(f.d)
 }
