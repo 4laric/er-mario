@@ -50,4 +50,3 @@ for archive in ['Data0','Data1','Data2','Data3','DLC']:
             q=wanted.pop(h);dest=out/q/'01_common.sblytbnd.dcx';dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(data)
             print('Extracted ONLY layout:',q,'archive',archive,'bytes',len(data),flush=True)
 assert not wanted,'requested layouts missing'
-
