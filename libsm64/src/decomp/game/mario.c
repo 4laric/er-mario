@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include "../../ap_capabilities.h"
+#include "../../ap_stats.h"
 
 #include "../shim.h"
 #include "../include/PR/os_cont.h"
@@ -1499,21 +1500,7 @@ void update_mario_health(struct MarioState *m) {
             }
         }
 
-        if (m->healCounter > 0) {
-            m->health += 0x40;
-            m->healCounter--;
-        }
-        if (m->hurtCounter > 0) {
-            m->health -= 0x40;
-            m->hurtCounter--;
-        }
-
-        if (m->health > 0x880) {
-            m->health = 0x880;
-        }
-        if (m->health < 0x100) {
-            m->health = 0xFF;
-        }
+        er_ap_update_heal_hurt(m);
 
         // Play a noise to alert the player when Mario is close to drowning.
         if (((m->action & ACT_GROUP_MASK) == ACT_GROUP_SUBMERGED) && (m->health < 0x300)) {
@@ -1916,7 +1903,7 @@ void init_mario_from_save_file(void) {
     gMarioState->numKeys = 0;
 
     gMarioState->numLives = 4;
-    gMarioState->health = 0x880;
+    gMarioState->health = er_ap_max_health();
 
     gMarioState->prevNumStarsForDialog = gMarioState->numStars;
     gMarioState->unkB0 = 0xBD;

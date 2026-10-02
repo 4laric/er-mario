@@ -4,6 +4,7 @@
 
 #include "libsm64.h"
 #include "ap_capabilities.h"
+#include "ap_stats.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -52,6 +53,15 @@ struct MarioInstance
     struct GlobalState *globalState;
 };
 struct ObjPool s_mario_instance_pool = { 0, 0 };
+
+SM64_LIB_FN void sm64_er_ap_set_max_wedges(uint32_t wedges) {
+    if (wedges < 4 || wedges > 8) return;
+    er_ap_max_wedges = wedges;
+    for (int i = 0; i < s_mario_instance_pool.size; i++) {
+        struct MarioInstance *instance = s_mario_instance_pool.objects[i];
+        if (instance != NULL) er_ap_enforce_health(&instance->globalState->mgMarioStateVal);
+    }
+}
 
 static void update_button( bool on, u16 button )
 {
@@ -231,6 +241,7 @@ SM64_LIB_FN void sm64_mario_tick( int32_t marioId, const struct SM64MarioInputs 
 
     global_state_bind( ((struct MarioInstance *)s_mario_instance_pool.objects[ marioId ])->globalState );
 
+    er_ap_enforce_health(gMarioState);
     // A seed change can revoke an ability while its action is in progress.
     // Cancel without giving a new jump, and release any carried object safely.
     int release = !er_ap_allows(32) && gMarioState->heldObj != NULL
@@ -264,6 +275,7 @@ SM64_LIB_FN void sm64_mario_tick( int32_t marioId, const struct SM64MarioInputs 
 
     gAreaUpdateCounter++;
 
+    er_ap_enforce_health(gMarioState);
     outState->health = gMarioState->health;
     vec3f_copy( outState->position, gMarioState->pos );
     vec3f_copy( outState->velocity, gMarioState->vel );
@@ -505,7 +517,7 @@ SM64_LIB_FN void sm64_set_mario_health(int32_t marioId, uint16_t health)
     struct GlobalState *globalState = ((struct MarioInstance *)s_mario_instance_pool.objects[ marioId ])->globalState;
     global_state_bind( globalState );
 
-    gMarioState->health = health;
+    gMarioState->health = er_ap_clamp_health(health);
     gMarioState->hurtCounter = 0;
     gMarioState->healCounter = 0;
 }
@@ -535,7 +547,7 @@ SM64_LIB_FN void sm64_mario_heal(int32_t marioId, uint8_t healCounter)
     struct GlobalState *globalState = ((struct MarioInstance *)s_mario_instance_pool.objects[ marioId ])->globalState;
     global_state_bind( globalState );
 
-    gMarioState->healCounter += healCounter;
+    gMarioState->healCounter = er_ap_bound_healing(gMarioState->health, (unsigned)gMarioState->healCounter + healCounter);
 }
 
 SM64_LIB_FN void sm64_mario_kill(int32_t marioId)

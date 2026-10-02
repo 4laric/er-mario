@@ -403,7 +403,7 @@ pub fn impact(combat: &mut Combat, handle: &FieldInsHandle, pct: f32, tick: u32)
     let Some(chr) = wcm.chr_ins_by_handle_mut(handle) else { return };
     let data = &mut chr.modules.data;
     let (hp, max) = (data.hp, data.max_hp.max(1));
-    let dmg = ((max as f32 * pct / 100.0).ceil() as i32).max(1);
+    let dmg = crate::ap_stats::percent_damage(max, pct);
     // (throws kill right there when the impact takes the rest of his HP)
     data.hp = (hp - dmg).max(0);
     show_damage(handle, hp, hp - data.hp, true);
@@ -502,7 +502,7 @@ fn take_share(handle: &FieldInsHandle, attack: Attack) -> bool {
     }
     let data = &mut chr.modules.data;
     let (hp, max) = (data.hp, data.max_hp.max(1));
-    let dmg = ((max as f32 * pct / 100.0).ceil() as i32).max(1);
+    let dmg = crate::ap_stats::percent_damage(max, pct);
     data.hp = (hp - dmg).max(1);
     show_damage(handle, hp, hp - data.hp, bar);
     log(format!("combat: {:?} on team {team}{}: {dmg} of {max} HP ({pct:.1}%), {} left", attack as u8, if boss { " boss" } else { "" }, data.hp));

@@ -22,6 +22,7 @@ mod names;
 mod paths;
 mod sm64;
 mod ap_capabilities;
+mod ap_stats;
 mod goldmask;
 mod goldmask_policy;
 mod hud_install_lock;
@@ -1628,7 +1629,7 @@ fn frame(data: &FD4TaskData) {
     } else {
         None
     };
-    hud::set(wedges.min(8), hide_why, true);
+    hud::set(wedges.min(ap_stats::max_wedges() as u8), hide_why, true);
     // the tail swing: watch the bosses' stance, carry / throw / fly the grabbed one
     swing::watch_stances(&combat::boss_handles());
     {
@@ -2095,7 +2096,7 @@ fn frame(data: &FD4TaskData) {
                 None => unsafe { sm64::sm64_er_set_head(0, 0.0, 0.0) },
             }
             if rested {
-                unsafe { sm64::sm64_set_mario_health(id, 0x880) };
+                unsafe { sm64::sm64_set_mario_health(id, ap_stats::full_health()) };
                 unsafe { sm64::sm64_play_sound_global(SOUND_HEART) };
             }
             let mut state = sm64::SM64MarioState::default();
