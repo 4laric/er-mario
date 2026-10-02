@@ -1,0 +1,33 @@
+# Rock and moving-platform collision
+
+`collision_geometry.rs` verifies the production winding conversion after X reflection:
+floors stay floors, ceilings stay ceilings, rock faces keep their exterior, inconsistent convex
+face indices become outward, and quantized degenerate triangles are dropped.
+
+`collision_platforms.c` links the production surface loader, collision queries, platform
+displacement and matrix routines. It checks a leaning rock wall and its triangle seam across
+static refreshes; static-to-object floor ties and rider attachment; the first lift movement;
+100 rising/descending steps with displacements exceeding the floor query's 78-unit buffer;
+stopping, translation plus rotation, jumping away, platform deletion and slot reuse.
+The workflow also runs the Rust reflected-platform rotation test through `cargo test`.
+All fixtures are synthetic and require no game assets, ROM or running game.
+
+The Windows workflow compiles and executes these tests before building the release DLL.
+
+## In-game validation still required
+
+The reported rock location was unspecified. No Elden Ring session was launched during this
+change, so test success does not establish coverage of every live Havok mesh/layer or the
+original clipping incident. The draft DLL should be checked on several stationary boulders
+from ground and air, along seams and sloping faces, and on an elevator from rest in both
+directions. Check stepping onto/off the lift, jumping while it moves, landing on it, stopping
+at both endpoints, and travelling far enough to trigger world-origin rebasing or streaming.
+
+Mesh triangles now retain Havok winding after the coordinate reflection rather than changing
+with Mario's location. Convex shapes and synthetic custom-piece boxes explicitly face outward.
+Havok accepts two-sided mesh hits; libsm64 uses oriented surfaces, so meshes with intentionally
+inconsistent or reversed authoring need particular attention in the in-game check.
+
+This branch starts at `d801f342c1c2ac1f938671ef97dc17a912e66e0c` and changes the collision refresh
+portion of `src/lib.rs`. Integrate with `codex/mario-fludd` by reviewing that shared tick loop
+and rerunning both branches' tests together; do not overwrite or blindly merge the FLUDD work.

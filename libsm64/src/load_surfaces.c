@@ -330,6 +330,8 @@ struct SM64SurfaceObjectTransform *surfaces_object_get_transform_ptr( uint32_t o
 
 void surfaces_unload_all( void )
 {
+    free( s_prev_static_surface_list );
+    s_prev_static_surface_list = NULL;
     free( s_static_surface_list );
     s_static_surface_count = 0;
     s_static_surface_list = NULL;
