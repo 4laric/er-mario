@@ -13,7 +13,7 @@ use crate::{explore, log};
 const PART_BONES: [&str; PARTS] = crate::assets::flver::PART_BONES;
 /// SM64's body parts (0..16) plus the eye variants (16..20).
 pub const SM64_PARTS: usize = 16;
-pub const PARTS: usize = 28;
+pub const PARTS: usize = 30;
 /// SM64's right hand part, and our peace-sign copy of it
 const RIGHT_HAND: usize = 9;
 const PEACE: usize = 20;
@@ -84,6 +84,21 @@ pub fn relative_parts(mats: &[f32], count: i32, mario: [f32; 3], eye_cell: u8, p
     ] {
         out[part] = PartPose { scale: if shown { torso.scale } else { 0.001 }, ..torso };
     }
+    let cappy = crate::ap_cappy::visual();
+    let head = out[HEAD];
+    let cap = if cappy.flying {
+        // Cap geometry uses the original head axes (-X up, +Y front, Z across).
+        // Keep it horizontal as it spins, with the native projectile at its center.
+        let axes = Mat3::from_cols(-Vec3::Y, Vec3::Z, -Vec3::X);
+        let rot = Quat::from_rotation_y(-cappy.spin_yaw) * Quat::from_mat3(&axes);
+        let delta = (Vec3::from_array(cappy.position) - Vec3::from_array(mario)) * crate::SCALE;
+        let center = Vec3::new(-delta.x, delta.y, delta.z);
+        PartPose { rot, pos: center - rot * Vec3::from_array(crate::assets::cappy::CENTER), scale: 1.0 }
+    } else {
+        head
+    };
+    out[crate::assets::cappy::CAP] = cap;
+    out[crate::assets::cappy::EYES] = PartPose { scale: if cappy.enabled { cap.scale } else { 0.001 }, ..cap };
     Some(out)
 }
 

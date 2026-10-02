@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use super::model::{MarioModel, Tri};
 
 /// SM64 part -> FLVER bone (bones the chest piece skins natively); same list as engine_mario.rs.
-pub const PART_BONES: [&str; 28] = [
+pub const PART_BONES: [&str; 30] = [
     "",
     "Pelvis_Mantle",
     "Spine2",
@@ -40,6 +40,9 @@ pub const PART_BONES: [&str; 28] = [
     "L_UpArmTwist1",
     "L_Thigh_Skirt",
     "R_Thigh_Skirt",
+    // Detachable original cap and authored Cappy eyes (safe leaf skin bones).
+    "R_Hand",
+    "L_Hand",
 ];
 /// SM64 units -> metres, times Mario's 0.25 model scale
 const UNIT: f64 = 0.01 * 0.25;
@@ -359,6 +362,7 @@ pub fn mario_vertices(model: &MarioModel) -> (Vec<Vertex>, Vec<[u16; 3]>) {
         }
     }
     super::fludd::append(&mut verts, &mut tris);
+    super::cappy::append(&mut verts, &mut tris);
     (verts, tris)
 }
 

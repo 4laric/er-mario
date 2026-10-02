@@ -42,12 +42,21 @@ fn capture() -> (Capture, usize) {
         local: vec![0.0; sm64::GEO_MAX_TRIANGLES * 9],
         normal: vec![0.0; sm64::GEO_MAX_TRIANGLES * 9],
     };
-    let parts = unsafe { sm64::sm64_er_get_parts(c.mats.as_mut_ptr(), c.part.as_mut_ptr(), c.local.as_mut_ptr(), c.normal.as_mut_ptr()) };
+    let parts = unsafe {
+        sm64::sm64_er_get_parts(
+            c.mats.as_mut_ptr(),
+            c.part.as_mut_ptr(),
+            c.local.as_mut_ptr(),
+            c.normal.as_mut_ptr(),
+        )
+    };
     (c, parts.max(0) as usize)
 }
 
 fn tris(c: &Capture, geo: &sm64::Geometry, filter: impl Fn(i32) -> bool) -> Vec<Tri> {
-    let v3 = |a: &[f32], t: usize, k: usize| [a[t * 9 + k * 3], a[t * 9 + k * 3 + 1], a[t * 9 + k * 3 + 2]];
+    let v3 = |a: &[f32], t: usize, k: usize| {
+        [a[t * 9 + k * 3], a[t * 9 + k * 3 + 1], a[t * 9 + k * 3 + 2]]
+    };
     (0..geo.used())
         .filter(|&t| filter(c.part[t]))
         .map(|t| Tri {
@@ -85,10 +94,27 @@ pub fn export(geo: &mut sm64::Geometry, atlas: Vec<u8>) -> Option<MarioModel> {
         tick(geo);
     }
     let (c, parts) = capture();
-    let model_tris = tris(&c, geo, |_| true);
-    let matrices = (0..parts).map(|p| c.mats[p * 16..p * 16 + 16].try_into().unwrap()).collect();
+    let mut model_tris = tris(&c, geo, |part| part != 3);
+    if !model_tris
+        .iter()
+        .any(|tri| tri.part == super::cappy::CAP as i32)
+    {
+        unsafe { sm64::sm64_mario_delete(id) };
+        return None;
+    }
+    let matrices = (0..parts)
+        .map(|p| c.mats[p * 16..p * 16 + 16].try_into().unwrap())
+        .collect();
+    // Replace the capped head with its own uncapped variant; the adapter exports the
+    // original hat separately as part 28. This keeps one face and one detachable cap.
+    // Setup-only flags: retain the normal cap, and restore it before the star dance.
+    unsafe { sm64::sm64_set_mario_state(id, 0x00000001) };
+    tick(geo);
+    let (bare, _) = capture();
+    model_tris.extend(tris(&bare, geo, |part| part == 3));
+    unsafe { sm64::sm64_set_mario_state(id, 0x00000011) };
     // the star dance (the same Mario two ticks later, like a fresh one after five)
-    for _ in 0..2 {
+    for _ in 0..1 {
         tick(geo);
     }
     unsafe { sm64::sm64_set_mario_action(id, ACT_STAR_DANCE_NO_EXIT) };
@@ -98,5 +124,10 @@ pub fn export(geo: &mut sm64::Geometry, atlas: Vec<u8>) -> Option<MarioModel> {
     let (c, _) = capture();
     let peace = tris(&c, geo, |p| p == RIGHT_HAND);
     unsafe { sm64::sm64_mario_delete(id) };
-    Some(MarioModel { tris: model_tris, matrices, peace, atlas })
+    Some(MarioModel {
+        tris: model_tris,
+        matrices,
+        peace,
+        atlas,
+    })
 }

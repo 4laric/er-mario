@@ -8,6 +8,7 @@
 
 pub mod archive;
 pub mod bnd4;
+pub mod cappy;
 pub mod dcx;
 pub mod flver;
 pub mod fludd;
@@ -22,7 +23,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::{log, paths};
 
 /// Bump when the generated files change, so existing installs rebuild.
-const VERSION: &str = "er-mario assets 3";
+const VERSION: &str = "er-mario assets 4";
 const STAMP: &str = "package/.built";
 const PIECES: [&str; 4] = ["hd", "bd", "am", "lg"];
 const QUALITIES: [&str; 2] = ["hi", "low"];

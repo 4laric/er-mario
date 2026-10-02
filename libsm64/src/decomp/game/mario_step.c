@@ -1,3 +1,4 @@
+#include "../../er_addons.h"
 #include "../shim.h"
 #include "../include/sm64.h"
 #include "../engine/math_util.h"
@@ -656,6 +657,7 @@ s32 perform_air_step(struct MarioState *m, u32 stepArg) {
     vec3f_copy(m->marioObj->header.gfx.pos, m->pos);
     vec3s_set(m->marioObj->header.gfx.angle, 0, m->faceAngle[1], 0);
 
+    if (stepResult == AIR_STEP_LANDED) er_addons_landed(m);
     return stepResult;
 }
 
