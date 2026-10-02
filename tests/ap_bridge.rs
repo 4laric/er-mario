@@ -19,6 +19,42 @@ mod worker {
     }
 }
 mod sm64 {
+    static CAPPY: std::sync::Mutex<[u32; 3]> = std::sync::Mutex::new([0; 3]);
+    static SONIC: std::sync::Mutex<[u32; 3]> = std::sync::Mutex::new([0; 3]);
+    pub unsafe fn sm64_er_cappy_configure(enabled: u32, mask: u32) {
+        let mut s = CAPPY.lock().unwrap();
+        s[0] = enabled;
+        s[1] = mask;
+        if enabled == 0 || mask & 1 == 0 {
+            s[2] = 0;
+        }
+    }
+    pub unsafe fn sm64_er_sonic_configure(enabled: u32, mask: u32) {
+        let mut s = SONIC.lock().unwrap();
+        s[0] = enabled;
+        s[1] = mask;
+        if enabled == 0 {
+            s[2] = 0;
+        }
+    }
+    pub unsafe fn sm64_er_cappy_get_state(out: *mut u32, visual: *mut f32) {
+        unsafe {
+            std::ptr::copy_nonoverlapping(CAPPY.lock().unwrap().as_ptr(), out, 3);
+            std::ptr::copy_nonoverlapping([10f32, 20., 30., 0.5].as_ptr(), visual, 4);
+        }
+    }
+    pub unsafe fn sm64_er_sonic_get_state(out: *mut u32) {
+        unsafe {
+            std::ptr::copy_nonoverlapping(SONIC.lock().unwrap().as_ptr(), out, 3);
+        }
+    }
+    pub fn cap_flying() {
+        CAPPY.lock().unwrap()[2] = 1;
+    }
+    pub fn sonic_dashing() {
+        SONIC.lock().unwrap()[2] = 4;
+    }
+
     use super::*;
     static FLUDD: std::sync::Mutex<[u32; 5]> = std::sync::Mutex::new([0, 0, 0, 0, 60]);
     pub unsafe fn sm64_er_fludd_configure(enabled: u32, mask: u32, level: u32) {
@@ -52,8 +88,12 @@ mod sm64 {
 }
 #[path = "../src/ap_capabilities.rs"]
 mod ap_capabilities;
+#[path = "../src/ap_cappy.rs"]
+mod ap_cappy;
 #[path = "../src/ap_fludd.rs"]
 mod ap_fludd;
+#[path = "../src/ap_sonic.rs"]
+mod ap_sonic;
 #[path = "../src/ap_stats.rs"]
 mod ap_stats;
 
@@ -72,7 +112,11 @@ fn abi_snapshots_are_validated_and_acknowledged_only_after_worker_application() 
     assert_eq!(unsafe { er_mario_ap_get_state(&mut state) }, 1);
     assert_eq!(
         state.flags,
-        4 | (SUPPORTS_REGRESSION_INTERACT | ap_stats::SUPPORTS_STATS | ap_fludd::SUPPORTS_FLUDD)
+        4 | (SUPPORTS_REGRESSION_INTERACT
+            | ap_stats::SUPPORTS_STATS
+            | ap_fludd::SUPPORTS_FLUDD
+            | ap_cappy::SUPPORTS_CAPPY
+            | ap_sonic::SUPPORTS_SONIC)
     );
     assert!(allows(ALL));
     assert_eq!(er_mario_ap_set_capabilities(ALL + 1, 0), 0);
@@ -86,7 +130,9 @@ fn abi_snapshots_are_validated_and_acknowledged_only_after_worker_application() 
             0,
             4 | (SUPPORTS_REGRESSION_INTERACT
                 | ap_stats::SUPPORTS_STATS
-                | ap_fludd::SUPPORTS_FLUDD)
+                | ap_fludd::SUPPORTS_FLUDD
+                | ap_cappy::SUPPORTS_CAPPY
+                | ap_sonic::SUPPORTS_SONIC)
         )
     );
     for unlocked in 0..=ALL {
@@ -102,7 +148,9 @@ fn abi_snapshots_are_validated_and_acknowledged_only_after_worker_application() 
                 unlocked,
                 4 | (SUPPORTS_REGRESSION_INTERACT
                     | ap_stats::SUPPORTS_STATS
-                    | ap_fludd::SUPPORTS_FLUDD)
+                    | ap_fludd::SUPPORTS_FLUDD
+                    | ap_cappy::SUPPORTS_CAPPY
+                    | ap_sonic::SUPPORTS_SONIC)
             )
         );
         for bit in [1, 2, 4, 8, 16, ENEMY_GRAB, BOSS_SWING, 128, 256, 512] {
@@ -121,19 +169,31 @@ fn abi_snapshots_are_validated_and_acknowledged_only_after_worker_application() 
     unsafe { er_mario_ap_get_state(&mut state) };
     assert_eq!(
         state.flags,
-        6 | (SUPPORTS_REGRESSION_INTERACT | ap_stats::SUPPORTS_STATS | ap_fludd::SUPPORTS_FLUDD)
+        6 | (SUPPORTS_REGRESSION_INTERACT
+            | ap_stats::SUPPORTS_STATS
+            | ap_fludd::SUPPORTS_FLUDD
+            | ap_cappy::SUPPORTS_CAPPY
+            | ap_sonic::SUPPORTS_SONIC)
     ); // Enabled/assets/libsm64 cannot prove a live Mario.
     set_live_instance(true);
     unsafe { er_mario_ap_get_state(&mut state) };
     assert_eq!(
         state.flags,
-        7 | (SUPPORTS_REGRESSION_INTERACT | ap_stats::SUPPORTS_STATS | ap_fludd::SUPPORTS_FLUDD)
+        7 | (SUPPORTS_REGRESSION_INTERACT
+            | ap_stats::SUPPORTS_STATS
+            | ap_fludd::SUPPORTS_FLUDD
+            | ap_cappy::SUPPORTS_CAPPY
+            | ap_sonic::SUPPORTS_SONIC)
     );
     set_live_instance(false);
     unsafe { er_mario_ap_get_state(&mut state) };
     assert_eq!(
         state.flags,
-        6 | (SUPPORTS_REGRESSION_INTERACT | ap_stats::SUPPORTS_STATS | ap_fludd::SUPPORTS_FLUDD)
+        6 | (SUPPORTS_REGRESSION_INTERACT
+            | ap_stats::SUPPORTS_STATS
+            | ap_fludd::SUPPORTS_FLUDD
+            | ap_cappy::SUPPORTS_CAPPY
+            | ap_sonic::SUPPORTS_SONIC)
     );
     assert_eq!(sm64::C_APPLIED.load(Ordering::Relaxed), 0);
     assert_eq!(std::mem::size_of::<State>(), 16);
@@ -265,4 +325,87 @@ fn fludd_abi_is_additive_validated_and_worker_acknowledged() {
         ),
         (4, 0, 0, 60)
     );
+}
+
+#[test]
+fn cappy_and_sonic_additive_abi_are_worker_acknowledged_without_resetting_runtime() {
+    let _guard = TEST_LOCK.lock().unwrap();
+    assert_eq!(std::mem::size_of::<ap_cappy::AddonState>(), 16);
+    assert_eq!(std::mem::size_of::<ap_sonic::AddonState>(), 16);
+    assert_eq!(
+        unsafe { ap_cappy::er_mario_ap_get_cappy_state(std::ptr::null_mut()) },
+        0
+    );
+    assert_eq!(
+        unsafe { ap_sonic::er_mario_ap_get_sonic_state(std::ptr::null_mut()) },
+        0
+    );
+    let mut c = ap_cappy::AddonState {
+        abi_version: 0,
+        flags: 0,
+        unlocked: 0,
+        runtime_state: 0,
+    };
+    let mut s = ap_sonic::AddonState {
+        abi_version: 0,
+        flags: 0,
+        unlocked: 0,
+        runtime_state: 0,
+    };
+    for (enabled, mask) in [(2, 0), (0, 1), (1, u32::MAX)] {
+        assert_eq!(ap_cappy::er_mario_ap_set_cappy(enabled, mask), 0);
+        assert_eq!(ap_sonic::er_mario_ap_set_sonic(enabled, mask), 0);
+    }
+    assert_eq!(ap_cappy::er_mario_ap_set_cappy(1, 4), 0);
+    assert_eq!(ap_sonic::er_mario_ap_set_sonic(1, 8), 0);
+    for mask in 0..=3 {
+        assert_eq!(ap_cappy::er_mario_ap_set_cappy(1, mask), 1);
+        unsafe { ap_cappy::er_mario_ap_get_cappy_state(&mut c) };
+        assert_eq!(c.flags & 4, 0);
+        ap_cappy::apply();
+        unsafe { ap_cappy::er_mario_ap_get_cappy_state(&mut c) };
+        assert_eq!((c.flags & 6, c.unlocked), (6, mask));
+    }
+    sm64::cap_flying();
+    ap_cappy::publish();
+    assert_eq!(ap_cappy::er_mario_ap_set_cappy(1, 3), 1);
+    ap_cappy::apply();
+    unsafe { ap_cappy::er_mario_ap_get_cappy_state(&mut c) };
+    assert_eq!(c.runtime_state, 1);
+    let v = ap_cappy::visual();
+    assert!(v.enabled && v.flying);
+    assert_eq!(v.position, [10., 20., 30.]);
+    assert_eq!(v.spin_yaw, 0.5);
+    for mask in 0..=7 {
+        assert_eq!(ap_sonic::er_mario_ap_set_sonic(1, mask), 1);
+        unsafe { ap_sonic::er_mario_ap_get_sonic_state(&mut s) };
+        assert_eq!(s.flags & 4, 0);
+        ap_sonic::apply();
+        unsafe { ap_sonic::er_mario_ap_get_sonic_state(&mut s) };
+        assert_eq!((s.flags & 6, s.unlocked), (6, mask));
+    }
+    sm64::sonic_dashing();
+    ap_sonic::publish();
+    assert_eq!(ap_sonic::er_mario_ap_set_sonic(1, 7), 1);
+    ap_sonic::apply();
+    unsafe { ap_sonic::er_mario_ap_get_sonic_state(&mut s) };
+    assert_eq!(s.runtime_state, 4);
+    assert_eq!(ap_sonic::visual().runtime_state, 4);
+    ap_capabilities::set_live_instance(false);
+    unsafe {
+        ap_cappy::er_mario_ap_get_cappy_state(&mut c);
+        ap_sonic::er_mario_ap_get_sonic_state(&mut s);
+    }
+    assert_eq!(c.flags & 1, 0);
+    assert_eq!(s.flags & 1, 0);
+    assert_eq!(ap_cappy::er_mario_ap_set_cappy(0, 0), 1);
+    assert_eq!(ap_sonic::er_mario_ap_set_sonic(0, 0), 1);
+    ap_cappy::apply();
+    ap_sonic::apply();
+    unsafe {
+        ap_cappy::er_mario_ap_get_cappy_state(&mut c);
+        ap_sonic::er_mario_ap_get_sonic_state(&mut s);
+    }
+    assert_eq!((c.flags & 6, c.unlocked, c.runtime_state), (4, 0, 0));
+    assert_eq!((s.flags & 6, s.unlocked, s.runtime_state), (4, 0, 0));
 }

@@ -32,6 +32,8 @@ fn sender() -> &'static Mutex<Sender<Job>> {
                 crate::ap_capabilities::apply();
                 job(&mut ctx);
                 crate::ap_fludd::publish();
+                crate::ap_cappy::publish();
+                crate::ap_sonic::publish();
             }
         });
         Mutex::new(tx)

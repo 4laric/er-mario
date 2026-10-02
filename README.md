@@ -58,6 +58,31 @@ Squirt is not included.
 The backpack adds generated model parts. On the first start with this build, allow
 asset setup to finish, then restart when prompted, as during initial installation.
 
+## Cappy and Sonic movement (experimental AP fork builds)
+
+Set `cappy = on` or `sonic_movement = on` in `er_mario.ini` for standalone play.
+Archipelago seeds use `mario_cappy` and `mario_sonic_movement`; all options default off
+and can coexist with FLUDD. These development builds keep Mario's appearance and add
+original movement implementations inspired by Odyssey and Sonic.
+
+**Cappy:** press **RT** or **O** to throw the cap. Hold to hover briefly, then release
+to recall it; it also returns automatically. Land on the deployed cap while descending
+to bounce. One cap bounce is available per real landing on the ground. AP seeds unlock
+Cap Throw and Cap Bounce separately. The cap has eyes and leaves Mario's head when
+thrown. Enemy capture and cap damage are not included.
+
+**Sonic movement:** hold **Left Stick Click** or **U** while grounded to charge Spin
+Dash, then release. Hold it in the air to charge Drop Dash for the next landing. Press
+**Right Stick Click** or **P** to Air Dash once per airtime; landing on the ground
+restores it. Cap bounces and FLUDD do not restore the aerial moves. AP seeds unlock
+the three moves separately. Homing attack is not included.
+
+Menus, loss of focus, death and incompatible actions cancel addon input. The AP console
+captures these keyboard keys while typing. Ordinary Mario actions retain priority, and
+only one movement system advances physics in a tick. Cappy's new model parts trigger
+the same asset setup and restart described above. Appearance, controls and balance
+still need a live playtest.
+
 ## Known issues
 
 - Cutscenes show a crumpled Mario with the Tarnished's head.

@@ -6,6 +6,7 @@
 #include "ap_capabilities.h"
 #include "ap_stats.h"
 #include "er_fludd.h"
+#include "er_addons.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,6 +57,19 @@ struct MarioInstance
 struct ObjPool s_mario_instance_pool = { 0, 0 };
 
 /* Internal worker-only FLUDD entry points, intentionally not DLL exports. */
+void sm64_er_cappy_configure(uint32_t enabled, uint32_t mask) { er_cappy_configure(enabled, mask); }
+void sm64_er_sonic_configure(uint32_t enabled, uint32_t mask) { er_sonic_configure(enabled, mask); }
+void sm64_er_addons_input(uint32_t allowed, uint32_t cap_held, uint32_t spin_held, uint32_t dash) { er_addons_input(allowed, cap_held, spin_held, dash); }
+void sm64_er_cappy_get_state(uint32_t *out, float *visual) {
+    out[0]=er_cappy.enabled; out[1]=er_cappy.mask; out[2]=er_cappy.phase;
+    for (int i=0;i<3;i++) visual[i]=er_cappy.position[i];
+    visual[3]=er_cappy.spin_yaw;
+}
+void sm64_er_sonic_get_state(uint32_t *out) {
+    out[0]=er_sonic.enabled; out[1]=er_sonic.mask;
+    out[2]=(er_sonic.spin_charge ? 1 : 0) | (er_sonic.drop_charge ? 2 : 0)
+        | (er_sonic.dash_ticks ? 4 : 0) | (er_sonic.rolling ? 8 : 0);
+}
 void sm64_er_fludd_configure(uint32_t enabled, uint32_t mask, uint32_t level) { er_fludd_configure(enabled, mask, level); }
 void sm64_er_fludd_input(uint32_t allowed, uint32_t held, uint32_t select, uint32_t cycle) { er_fludd_input(allowed, held, select, cycle); }
 void sm64_er_fludd_refill(void) { er_fludd.water = er_fludd.enabled ? er_fludd.capacity : 0; }
@@ -196,6 +210,7 @@ SM64_LIB_FN void sm64_static_surfaces_load( const struct SM64Surface *surfaceArr
 SM64_LIB_FN int32_t sm64_mario_create( float x, float y, float z )
 {
     er_fludd_reset();
+    er_addons_reset();
     int32_t marioIndex = obj_pool_alloc_index( &s_mario_instance_pool, sizeof( struct MarioInstance ));
     struct MarioInstance *newInstance = s_mario_instance_pool.objects[marioIndex];
 
@@ -307,6 +322,7 @@ SM64_LIB_FN void sm64_mario_tick( int32_t marioId, const struct SM64MarioInputs 
 SM64_LIB_FN void sm64_mario_delete( int32_t marioId )
 {
     er_fludd_input(0, 0, 0, 0);
+    er_addons_input(0, 0, 0, 0);
     if( marioId >= s_mario_instance_pool.size || s_mario_instance_pool.objects[marioId] == NULL )
     {
         DEBUG_PRINT("Tried to delete non-existant Mario with ID: %u", marioId);

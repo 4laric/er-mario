@@ -7,6 +7,7 @@
 #include "gfx_adapter.h"
 #include "gfx_adapter_commands.h"
 #include "load_tex_data.h"
+#include "decomp/mario/model.inc.h"
 
 static Mat4 s_curMatrix;
 static float s_curColor[3];
@@ -52,6 +53,10 @@ static void process_display_list( void *dl )
 {
     intptr_t *ptr = (intptr_t *)dl;
     Vtx *vdata = NULL;
+    // The original hat shares the head's transform. Give its two exact display lists
+    // a separate rigid part so Cappy can move it without changing Mario's cap flags.
+    const int cap_part = er_part_count - 1 == 3
+        && (dl == (void*)mario_face_cap_dl || dl == (void*)mario_m_logo_dl);
 
     for( ;; )
     {
@@ -91,7 +96,7 @@ static void process_display_list( void *dl )
                     int tri = (int)((s_trianglePtr - s_outBuffers->position) / 9);
                     if( tri < SM64_GEO_MAX_TRIANGLES )
                     {
-                        er_tri_part[tri] = er_part_count - 1;
+                        er_tri_part[tri] = cap_part ? 28 : er_part_count - 1;
                         float *lp = &er_local_pos[tri * 9], *ln = &er_local_normal[tri * 9];
                         lp[0] = p0[0]; lp[1] = p0[1]; lp[2] = p0[2]; lp[3] = p1[0]; lp[4] = p1[1]; lp[5] = p1[2];
                         lp[6] = p2[0]; lp[7] = p2[1]; lp[8] = p2[2];

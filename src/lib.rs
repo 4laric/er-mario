@@ -24,6 +24,8 @@ mod sm64;
 mod ap_capabilities;
 mod ap_stats;
 pub(crate) mod ap_fludd;
+pub(crate) mod ap_cappy;
+pub(crate) mod ap_sonic;
 mod goldmask;
 mod goldmask_policy;
 mod hud_install_lock;
@@ -52,7 +54,8 @@ use windows::Win32::UI::Input::XboxController::{
     XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_B, XINPUT_GAMEPAD_LEFT_SHOULDER,
     XINPUT_GAMEPAD_BACK, XINPUT_GAMEPAD_START, XINPUT_GAMEPAD_X, XINPUT_GAMEPAD_Y,
     XINPUT_GAMEPAD_RIGHT_SHOULDER, XINPUT_GAMEPAD_DPAD_UP, XINPUT_GAMEPAD_DPAD_DOWN,
-    XINPUT_GAMEPAD_DPAD_LEFT, XINPUT_GAMEPAD_DPAD_RIGHT, XINPUT_STATE,
+    XINPUT_GAMEPAD_DPAD_LEFT, XINPUT_GAMEPAD_DPAD_RIGHT, XINPUT_GAMEPAD_LEFT_THUMB,
+    XINPUT_GAMEPAD_RIGHT_THUMB, XINPUT_STATE,
 };
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows::core::{PCSTR, w};
@@ -161,6 +164,8 @@ fn xinput_filter(index: u32, state: *mut XINPUT_STATE, rc: u32) -> u32 {
             g.wButtons &= !XINPUT_GAMEPAD_RIGHT_SHOULDER;
             if selecting { g.wButtons &= !(XINPUT_GAMEPAD_DPAD_UP | XINPUT_GAMEPAD_DPAD_DOWN | XINPUT_GAMEPAD_DPAD_RIGHT | XINPUT_GAMEPAD_DPAD_LEFT); }
         }
+        if ap_cappy::visual().enabled { g.bRightTrigger = 0; }
+        if ap_sonic::visual().enabled { g.wButtons &= !(XINPUT_GAMEPAD_LEFT_THUMB | XINPUT_GAMEPAD_RIGHT_THUMB); }
         // with the SM64 camera the right stick is Lakitu's C-buttons, not Elden Ring's camera
         if lakitu::ON.load(Ordering::Relaxed) {
             g.sThumbRX = 0;
@@ -1637,8 +1642,8 @@ fn frame(data: &FD4TaskData) {
         None
     };
     hud::set(wedges.min(ap_stats::max_wedges() as u8), hide_why, true);
-    if (hide_why.is_some() || FOLLOWING.load(Ordering::Relaxed)) && ap_fludd::visual().enabled {
-        worker::call("FLUDD suspended", |_| { unsafe { sm64::sm64_er_fludd_input(0, 0, 0, 0) }; ap_fludd::publish(); });
+    if (hide_why.is_some() || FOLLOWING.load(Ordering::Relaxed)) && (ap_fludd::visual().enabled || ap_cappy::visual().enabled || ap_sonic::visual().enabled) {
+        worker::call("addon movement suspended", |_| { unsafe { sm64::sm64_er_fludd_input(0, 0, 0, 0); sm64::sm64_er_addons_input(0, 0, 0, 0); }; ap_fludd::publish(); });
     }
     // the tail swing: watch the bosses' stance, carry / throw / fly the grabbed one
     swing::watch_stances(&combat::boss_handles());
@@ -1798,8 +1803,8 @@ fn frame(data: &FD4TaskData) {
     // itself (frame below). Stepping it here as well ran Mario at up to twice the speed there.
     let paused = paused || FOLLOWING.load(Ordering::Relaxed);
     if paused {
-        if ap_fludd::visual().enabled && hide_why.is_none() && !FOLLOWING.load(Ordering::Relaxed) {
-            worker::call("FLUDD paused", |_| unsafe { sm64::sm64_er_fludd_input(0, 0, 0, 0) });
+        if (ap_fludd::visual().enabled || ap_cappy::visual().enabled || ap_sonic::visual().enabled) && hide_why.is_none() && !FOLLOWING.load(Ordering::Relaxed) {
+            worker::call("addon movement paused", |_| unsafe { sm64::sm64_er_fludd_input(0, 0, 0, 0); sm64::sm64_er_addons_input(0, 0, 0, 0); });
         }
         m.acc = 0.0;
         // SM64's sound keeps going while the world is paused (queued sounds would wait otherwise)
@@ -1819,6 +1824,7 @@ fn frame(data: &FD4TaskData) {
     while m.acc >= 1.0 / 30.0 {
         m.acc -= 1.0 / 30.0;
         SM64_TICKS.fetch_add(1, Ordering::Relaxed);
+        let (mut cap_held, mut spin_held, mut air_dash) = (false, false, false);
         let mut fludd_held = false;
         let mut fludd_select = 0u32;
         let mut fludd_cycle = false;
@@ -1831,6 +1837,9 @@ fn frame(data: &FD4TaskData) {
             };
             inputs.stick_x = axis(g.sThumbLX);
             inputs.stick_y = -axis(g.sThumbLY);
+            cap_held = g.bRightTrigger > 100;
+            spin_held = g.wButtons.contains(XINPUT_GAMEPAD_LEFT_THUMB);
+            air_dash = g.wButtons.contains(XINPUT_GAMEPAD_RIGHT_THUMB);
             fludd_held = g.wButtons.contains(XINPUT_GAMEPAD_RIGHT_SHOULDER);
             if fludd_held {
                 if g.wButtons.contains(XINPUT_GAMEPAD_DPAD_UP) { fludd_select = ap_fludd::HOVER; }
@@ -1859,6 +1868,9 @@ fn frame(data: &FD4TaskData) {
                 inputs.button_a |= k.a as u8;
                 inputs.button_b |= k.b as u8;
                 inputs.button_z |= k.z as u8;
+                cap_held |= k.cappy;
+                spin_held |= k.spin;
+                air_dash |= k.dash;
                 fludd_held |= k.fludd;
                 fludd_cycle |= k.nozzle;
             }
@@ -2126,6 +2138,7 @@ fn frame(data: &FD4TaskData) {
                 unsafe { sm64::sm64_play_sound_global(SOUND_HEART) };
             }
             unsafe {
+                sm64::sm64_er_addons_input(fludd_allowed as u32, cap_held as u32, spin_held as u32, air_dash as u32);
                 sm64::sm64_er_fludd_input(fludd_allowed as u32, fludd_held as u32, fludd_select, fludd_cycle as u32);
                 if rested { sm64::sm64_er_fludd_refill(); }
             }
@@ -2135,6 +2148,8 @@ fn frame(data: &FD4TaskData) {
                 unsafe { sm64::sm64_mario_tick(id, &inputs, &mut state, &mut *buffers) };
             }
             ap_fludd::publish();
+            ap_cappy::publish();
+            ap_sonic::publish();
             // SM64's sound engine runs at the same 30 Hz as Mario
             let mut buf = [0i16; 544 * 2 * 2];
             let frames = unsafe { sm64::sm64_audio_tick(audio::queued(), 1100, buf.as_mut_ptr()) } as usize;

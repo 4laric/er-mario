@@ -46,6 +46,8 @@ pub fn apply() {
     APPLIED.store(state, Ordering::Release);
     crate::ap_stats::apply();
     crate::ap_fludd::apply();
+    crate::ap_cappy::apply();
+    crate::ap_sonic::apply();
 }
 
 #[unsafe(no_mangle)]
@@ -83,7 +85,9 @@ pub unsafe extern "C" fn er_mario_ap_get_state(out: *mut State) -> u32 {
                 | (u32::from(applied) << 2)
                 | SUPPORTS_REGRESSION_INTERACT
                 | crate::ap_stats::SUPPORTS_STATS
-                | crate::ap_fludd::SUPPORTS_FLUDD,
+                | crate::ap_fludd::SUPPORTS_FLUDD
+                | crate::ap_cappy::SUPPORTS_CAPPY
+                | crate::ap_sonic::SUPPORTS_SONIC,
             // Stats feature support does not depend on current liveness.
             managed: (state >> 32) as u32,
             unlocked: state as u32,

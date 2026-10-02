@@ -27,7 +27,10 @@ pub static CAPTURE: AtomicBool = AtomicBool::new(false);
 const HIDDEN: [u32; 7] = [0x11, 0x1E, 0x1F, 0x20, 0x26, 0x33, 0x25];
 
 fn hidden(k: u32) -> bool {
-    HIDDEN.contains(&k) || (crate::ap_fludd::visual().enabled && !crate::MENU_OPEN.load(Ordering::Relaxed) && (k == 0x24 || k == 0x17))
+    HIDDEN.contains(&k) || (!crate::MENU_OPEN.load(Ordering::Relaxed) && (
+        (crate::ap_fludd::visual().enabled && (k == 0x24 || k == 0x17))
+        || (crate::ap_cappy::visual().enabled && k == 0x18)
+        || (crate::ap_sonic::visual().enabled && (k == 0x16 || k == 0x19))))
 }
 
 const VK_W: i32 = 0x57;
@@ -53,6 +56,9 @@ pub fn focused() -> bool {
 }
 
 pub struct Keys {
+    pub cappy: bool,
+    pub spin: bool,
+    pub dash: bool,
     pub fludd: bool,
     pub nozzle: bool,
     pub stick_x: f32,
@@ -77,6 +83,9 @@ pub fn read() -> Option<Keys> {
         a: down(VK_L) || down(VK_RBUTTON),
         b: down(VK_COMMA) || down(VK_LBUTTON),
         z: down(VK_K),
+        cappy: down(0x4F),
+        spin: down(0x55),
+        dash: down(0x50),
         fludd: down(0x4A),
         nozzle: down(0x49),
     })
@@ -150,8 +159,8 @@ pub unsafe fn install_hooks() {
                 for &k in &HIDDEN {
                     unsafe { *data.add(k as usize) = 0 };
                 }
-                if crate::ap_fludd::visual().enabled && !crate::MENU_OPEN.load(Ordering::Relaxed) {
-                    for k in [0x24usize, 0x17usize] { unsafe { *data.add(k) = 0 }; }
+                for k in [0x24u32, 0x17, 0x18, 0x16, 0x19] {
+                    if hidden(k) { unsafe { *data.add(k as usize) = 0 }; }
                 }
             }
             rc as u32 as usize

@@ -112,6 +112,15 @@ pub fn mario_albedo(model: &MarioModel) -> Image {
             }
         }
     }
+    for (i, color) in super::cappy::COLORS.iter().enumerate() {
+        let cx = super::cappy::SWATCH_X[i];
+        let cy = super::cappy::SWATCH_Y;
+        for y in cy - 16..cy + 16 {
+            for x in cx - 16..cx + 16 {
+                img.px[y * SIZE + x] = *color;
+            }
+        }
+    }
     img
 }
 
