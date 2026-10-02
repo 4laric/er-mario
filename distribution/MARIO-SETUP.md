@@ -7,17 +7,17 @@ You need Elden Ring on Steam, me3 (https://me3.help), your own US Super Mario 64
 1. Unzip this archive to a writable folder. Put your own US SM64 ROM beside er_mario.dll, or set rom= in er_mario.ini to its full path.
 2. Start er-mario-setup.me3 with me3. Mario builds its package from your ROM and installed Elden Ring archives. At Setup complete, follow its prompt to close the game. This setup profile uses a separate ER0000_mario_ap.sl2 save, also used by the paired profile. Do not start the AP seed until setup finishes.
 3. Install Python and its local extraction dependency: `py -m pip install cryptography`. Download and extract WitchyBND separately. Save and quit Elden Ring before composing icons.
-4. In PowerShell, from this companion folder, run:
+4. In PowerShell, from this companion folder, run. The execution-policy override applies only to this child process; it does not change your saved PowerShell policy:
 
    ```powershell
-   .\Compose-AP-Flower.ps1 -GameDir 'C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game' -Witchy 'C:\Tools\WitchyBND\WitchyBND.exe'
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Compose-AP-Flower.ps1 -GameDir 'C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game' -Witchy 'C:\Tools\WitchyBND\WitchyBND.exe'
    ```
 
    This extracts only the two sprite-layout containers locally, then splices the public AP flower into Mario's generated hi/low atlases. It preserves Mario's icon sheet and all pixels outside the flower rectangle. Original atlases and temporary files remain under .local-build for recovery. It never installs or redistributes Oodle. Repeat this step after Mario regenerates package or game updates invalidate generated assets.
 5. Extract the ordinary AP client release normally. Configure that release's me3/apconfig.json, or use its connect overlay. Create the paired profile here, pointing at the folder that contains the AP DLL:
 
    ```powershell
-   .\Create-Paired-Profile.ps1 -APClientDir 'C:\Mods\EldenRing-AP\me3'
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Create-Paired-Profile.ps1 -APClientDir 'C:\Mods\EldenRing-AP\me3'
    ```
 
    The generated er-mario-ap.me3 loads this folder's Mario DLL and generated package together with the existing AP DLL by absolute path. AP keeps its configuration beside its own DLL. This does not change the vanilla AP profile. Do not load another full menu atlas override with the paired profile: the composed Mario atlas already contains both icon sets.
