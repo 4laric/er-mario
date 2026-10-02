@@ -20,5 +20,6 @@ void er_addons_reset(void);
 void er_addons_landed(struct MarioState *m);
 /* Advances the cap, then claims at most one collision-resolved Mario physics step. */
 int er_addons_step(struct MarioState *m);
+int er_addons_dispatch(struct MarioState *m);
 void er_addons_after(struct MarioState *m);
 #endif

@@ -28,8 +28,15 @@ struct RTri {
     textured: bool,
 }
 
+// The detachable hat still belongs to the head icon and uses its captured matrix.
+// Part 28 has no independent SM64 matrix; only the engine renderer animates it.
+fn icon_part(part: i32) -> i32 {
+    if part == super::cappy::CAP as i32 { 3 } else { part }
+}
+
 fn prepare(model: &MarioModel, t: &Tri) -> RTri {
-    let m = &model.matrices[t.part as usize];
+    let part = icon_part(t.part);
+    let m = &model.matrices[part as usize];
     // world normals: local normals through the part's rotation (row vectors)
     let rot = DMat3::from_cols_array(&[m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]].map(|v| v as f64)).transpose();
     let tex = textured(t);
@@ -42,7 +49,7 @@ fn prepare(model: &MarioModel, t: &Tri) -> RTri {
         }
     }
     RTri {
-        part: t.part,
+        part,
         p: t.world.map(|v| DVec3::new(v[0] as f64, v[1] as f64, v[2] as f64)),
         n: t.normal.map(|v| {
             let n = DVec3::new(v[0] as f64, v[1] as f64, v[2] as f64);
@@ -68,7 +75,7 @@ fn sample(atlas: &[u8], u: f64, v: f64) -> [f64; 4] {
 }
 
 fn render(model: &MarioModel, parts: &[i32], (yaw, pitch): (f64, f64)) -> Vec<u8> {
-    let mut tris: Vec<RTri> = model.tris.iter().filter(|t| parts.contains(&t.part)).map(|t| prepare(model, t)).collect();
+    let mut tris: Vec<RTri> = model.tris.iter().filter(|t| parts.contains(&icon_part(t.part))).map(|t| prepare(model, t)).collect();
     if parts.len() == 2 {
         // a pair (hands, feet): pull the two pieces together so they fill the icon
         let center = |q: i32| {

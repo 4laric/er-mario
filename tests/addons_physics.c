@@ -30,7 +30,7 @@ static void reset(void) {
     er_fludd_configure(0,0,0);er_fludd_reset();air_calls=ground_calls=collision=wall=queries=0;ceiling=10000;floor_y=0;
 }
 static int step(struct MarioState *m) {
-    int claim=er_addons_step(m)||er_fludd_step(m);
+    int claim=er_addons_dispatch(m);
     er_addons_after(m);er_fludd_after(m);return claim;
 }
 int main(void) {
@@ -107,6 +107,13 @@ int main(void) {
     /* Priority: Sonic movement prevents a second FLUDD air step or fuel consumption. */
     reset();m=mario();m.action=ACT_FREEFALL;er_sonic_configure(1,4);er_fludd_configure(1,7,0);er_fludd_reset();
     er_addons_input(1,0,0,1);er_fludd_input(1,1,1,0);assert(step(&m)&&air_calls==1&&er_fludd.water==60);
+    /* A previously active jet cannot keep its visual on after losing ownership. */
+    reset();m=mario();er_fludd_configure(1,7,0);er_fludd_reset();er_fludd_input(1,1,1,0);
+    er_addons_input(1,0,0,0);assert(step(&m)&&er_fludd.active&&er_fludd.water==59);
+    unsigned water=er_fludd.water,charge=er_fludd.charge;int calls=air_calls;
+    er_sonic_configure(1,4);er_addons_input(1,0,0,1);
+    assert(step(&m)&&air_calls==calls+1&&!er_fludd.active);
+    assert(er_fludd.water==water&&er_fludd.charge==charge);
     /* Normal buttons and unsafe conditions cancel traversal without granting resources. */
     for(int reason=0;reason<9;reason++) {
         reset();m=mario();er_cappy_configure(1,3);er_sonic_configure(1,7);er_addons_input(1,1,1,1);

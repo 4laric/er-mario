@@ -1,5 +1,6 @@
 /* Original traversal implementation. No Odyssey/Sonic mod code or assets are used. */
 #include "er_addons.h"
+#include "er_fludd.h"
 #include "decomp/include/sm64.h"
 #include "decomp/include/mario_animation_ids.h"
 #include "decomp/game/mario.h"
@@ -190,4 +191,11 @@ int er_addons_step(struct MarioState *m) {
 }
 void er_addons_after(struct MarioState *m) {
     if(!safe(m)) { cancel_cap(); cancel_sonic(); }
+}
+
+/* The production caller and tests share ownership and visual cancellation.
+   Pausing a jet for a higher-priority move preserves charge and water. */
+int er_addons_dispatch(struct MarioState *m) {
+    if (er_addons_step(m)) { er_fludd.active=0; return 1; }
+    return er_fludd_step(m);
 }

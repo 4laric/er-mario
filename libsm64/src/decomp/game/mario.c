@@ -1727,7 +1727,7 @@ s32 execute_mario_action(UNUSED struct Object *o) {
         // The function can loop through many action shifts in one frame,
         // which can lead to unexpected sub-frame behavior. Could potentially hang
         // if a loop of actions were found, but there has not been a situation found.
-        if (er_addons_step(gMarioState) || er_fludd_step(gMarioState)) inLoop = FALSE;
+        if (er_addons_dispatch(gMarioState)) inLoop = FALSE;
         while (inLoop) {
             switch (gMarioState->action & ACT_GROUP_MASK) {
                 case ACT_GROUP_STATIONARY:
