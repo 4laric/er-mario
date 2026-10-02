@@ -351,6 +351,14 @@ f32 find_ceil(f32 posX, f32 posY, f32 posZ, struct SM64SurfaceCollisionData **pc
 
 struct SM64FloorCollisionData sFloorGeo;
 
+f32 find_ceil_above_mario(f32 x, f32 marioY, f32 z, f32 floorY, struct SM64SurfaceCollisionData **pceil) {
+    // Across a cliff the queried floor can be far below Mario. Anchoring only
+    // to that floor admits undersides below his feet as phantom ceilings.
+    // Keep the raised-floor check for landing/steps, but never search below him.
+    f32 base = marioY > floorY ? marioY : floorY;
+    return find_ceil(x, base + 80.0f, z, pceil);
+}
+
 f32 find_floor_height_and_data(f32 xPos, f32 yPos, f32 zPos, struct SM64FloorCollisionData **floorGeo)
 {
     struct SM64SurfaceCollisionData *floor;

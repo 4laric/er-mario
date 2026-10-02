@@ -43,6 +43,18 @@ vertical-only movement. Live validation remains required at Godrick: walking/jum
 must block before Interact, entry must work after Interact, and defeated-boss passage must stay
 open. Also check normal stairs, sloped ground and elevators for guard false positives.
 
+## Invisible collision after descending the Liurnia cliff
+
+The user reported blocked walking and jumping in southern Liurnia after jumping from the
+post-Godrick cliff and landing with Hover. The screenshot alone cannot identify the surface.
+The production ceiling query had a relevant defect: `vec3f_find_ceil` anchored its search to
+the next floor even when it was far below Mario. A synthetic cliff fixture reproduces a
+downward-facing surface below Mario becoming an overhead obstruction; it fails before the
+fix. The query now starts at the greater of Mario's feet and the candidate floor height.
+Tests also preserve a genuine low roof and ceiling checks above raised landing floors.
+All callers of the existing ceiling helper use this correction. Re-test the reported ledge
+and check real roofs/overhangs in-game before claiming the live incident is resolved.
+
 ## In-game validation still required
 
 The reported rock location was unspecified. No Elden Ring session was launched during this

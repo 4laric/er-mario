@@ -147,10 +147,36 @@ static void stake_gap(void) {
     surfaces_unload_all();
 }
 
+static void ledge_ceiling(void) {
+    const struct SM64Surface valley[] = {
+        {0, 0, 0, {{-500, -1000, -500}, {500, -1000, 500}, {500, -1000, -500}}},
+        {0, 0, 0, {{-500, -200, -500}, {500, -200, -500}, {500, -200, 500}}}
+    };
+    surfaces_load_static(valley, 2);
+    struct SM64SurfaceCollisionData *floor, *ceil;
+    Vec3f pos = {0, 0, 0};
+    float floorHeight = find_floor(pos[0], pos[1], pos[2], &floor);
+    assert(floor && floorHeight == -1000);
+    /* The downward face two metres BELOW Mario is not an overhead obstacle,
+     * even though the next floor is ten metres down across the ledge. */
+    find_ceil_above_mario(pos[0], pos[1], pos[2], floorHeight, &ceil);
+    assert(ceil == NULL);
+    /* A real roof still blocks the jump, including a low head-bonk roof. */
+    const struct SM64Surface roof[] = {
+        {0, 0, 0, {{-500, 100, -500}, {500, 100, -500}, {500, 100, 500}}}
+    };
+    surfaces_load_static(roof, 1);
+    assert(find_ceil_above_mario(0, 0, 0, -1000, &ceil) == 100 && ceil);
+    /* A raised landing floor, rather than the old feet height, is still used. */
+    assert(find_ceil_above_mario(0, -100, 0, 0, &ceil) == 100 && ceil);
+    surfaces_unload_all();
+}
+
 int main(void) {
+    ledge_ceiling();
     stake_gap();
     rock_wall();
     lifts();
-    puts("stake seams, rock collision and elevator regression tests passed");
+    puts("ledge ceilings, stake seams, rock collision and elevator regression tests passed");
     return 0;
 }
