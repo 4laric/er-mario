@@ -37,13 +37,16 @@ fn abi_snapshots_are_validated_and_acknowledged_only_after_worker_application() 
     assert_eq!(er_mario_ap_abi_version(), 1);
     assert_eq!(unsafe { er_mario_ap_get_state(std::ptr::null_mut()) }, 0);
     assert_eq!(unsafe { er_mario_ap_get_state(&mut state) }, 1);
-    assert_eq!(state.flags, 4);
+    assert_eq!(state.flags, 4 | SUPPORTS_REGRESSION_INTERACT);
     assert!(allows(ALL));
     assert_eq!(er_mario_ap_set_capabilities(ALL + 1, 0), 0);
     assert_eq!(er_mario_ap_set_capabilities(1, 2), 0);
     assert_eq!(er_mario_ap_set_capabilities(0, ALL), 0);
     unsafe { er_mario_ap_get_state(&mut state) };
-    assert_eq!((state.managed, state.unlocked, state.flags), (0, 0, 4));
+    assert_eq!(
+        (state.managed, state.unlocked, state.flags),
+        (0, 0, 4 | SUPPORTS_REGRESSION_INTERACT)
+    );
     for unlocked in 0..=ALL {
         assert_eq!(er_mario_ap_set_capabilities(ALL, unlocked), 1);
         unsafe { er_mario_ap_get_state(&mut state) };
@@ -52,7 +55,7 @@ fn abi_snapshots_are_validated_and_acknowledged_only_after_worker_application() 
         unsafe { er_mario_ap_get_state(&mut state) };
         assert_eq!(
             (state.managed, state.unlocked, state.flags),
-            (ALL, unlocked, 4)
+            (ALL, unlocked, 4 | SUPPORTS_REGRESSION_INTERACT)
         );
         for bit in [1, 2, 4, 8, 16, ENEMY_GRAB, BOSS_SWING, 128, 256, 512] {
             assert_eq!(allows(bit), unlocked & bit != 0);
@@ -68,13 +71,13 @@ fn abi_snapshots_are_validated_and_acknowledged_only_after_worker_application() 
     SM64_READY.store(true, Ordering::Relaxed);
     ENABLED.store(true, Ordering::Relaxed);
     unsafe { er_mario_ap_get_state(&mut state) };
-    assert_eq!(state.flags, 6); // Enabled/assets/libsm64 cannot prove a live Mario.
+    assert_eq!(state.flags, 6 | SUPPORTS_REGRESSION_INTERACT); // Enabled/assets/libsm64 cannot prove a live Mario.
     set_live_instance(true);
     unsafe { er_mario_ap_get_state(&mut state) };
-    assert_eq!(state.flags, 7);
+    assert_eq!(state.flags, 7 | SUPPORTS_REGRESSION_INTERACT);
     set_live_instance(false);
     unsafe { er_mario_ap_get_state(&mut state) };
-    assert_eq!(state.flags, 6);
+    assert_eq!(state.flags, 6 | SUPPORTS_REGRESSION_INTERACT);
     assert_eq!(sm64::C_APPLIED.load(Ordering::Relaxed), 0);
     assert_eq!(std::mem::size_of::<State>(), 16);
 }

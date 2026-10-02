@@ -4,6 +4,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 pub const ALL: u32 = 0x3ff;
 pub const ENEMY_GRAB: u32 = 32;
 pub const BOSS_SWING: u32 = 64;
+/// Immutable feature support, independent of current Mario liveness.
+pub const SUPPORTS_REGRESSION_INTERACT: u32 = 8;
 static REQUESTED: AtomicU64 = AtomicU64::new(0);
 static APPLIED: AtomicU64 = AtomicU64::new(0);
 // Published by the game thread after a successful tick and usable Mario pose.
@@ -74,7 +76,10 @@ pub unsafe extern "C" fn er_mario_ap_get_state(out: *mut State) -> u32 {
     unsafe {
         out.write(State {
             abi_version: 1,
-            flags: u32::from(ready) | (u32::from(enabled) << 1) | (u32::from(applied) << 2),
+            flags: u32::from(ready)
+                | (u32::from(enabled) << 1)
+                | (u32::from(applied) << 2)
+                | SUPPORTS_REGRESSION_INTERACT,
             managed: (state >> 32) as u32,
             unlocked: state as u32,
         });

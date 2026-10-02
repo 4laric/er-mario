@@ -30,6 +30,13 @@ latest requested snapshot. An accepted setter call is not an acknowledgement of
 application. Wait for all three flags and matching masks before admitting the
 player to a Mario seed.
 
+Flags bit 3 (value 8) is immutable `SUPPORTS_REGRESSION_INTERACT`, available
+before initialization. ABI version remains 1. Seeds declaring
+`mario_regression_v1` require this support flag. While a managed Mario is live,
+interacting within 4 metres of the loaded Radagon statue with Law of Regression
+in the bag or storage supplies the native reveal effect. The game's event owns
+the reveal and Goldmask quest flags; this bridge never writes them.
+
 Instance readiness is cleared before creation failures, deletion, respawn,
 loading, death, missing poses, safety shutdown and caught game-thread panics.
 It is published by the game thread through an atomic; the ABI query never locks

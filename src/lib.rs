@@ -22,6 +22,8 @@ mod names;
 mod paths;
 mod sm64;
 mod ap_capabilities;
+mod goldmask;
+mod goldmask_policy;
 mod hud_install_lock;
 mod swing;
 mod stats;
@@ -2221,7 +2223,9 @@ fn frame(data: &FD4TaskData) {
         let cur = current_anim(&player_ref.chr_ins);
         let mut armed = ARMED.lock().unwrap_or_else(|e| e.into_inner());
         let mut follow = FOLLOW.lock().unwrap_or_else(|e| e.into_inner());
-        if INTERACT_PRESSED.swap(false, Ordering::Relaxed) && follow.is_none() {
+        let interact = INTERACT_PRESSED.swap(false, Ordering::Relaxed);
+        goldmask::interact(player_ref, interact);
+        if interact && follow.is_none() {
             *armed = Some((std::time::Instant::now(), cur));
         }
         // any event animation (6xxxx: fog walls, doors, levers...) is game-driven
