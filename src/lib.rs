@@ -1003,7 +1003,9 @@ fn input_task() {
     }
     let menu = MENU_OPEN.load(Ordering::Relaxed);
     let (mut opener, mut pressed) = (false, false);
-    if let Some(p) = pad {
+    // alt-tabbed: the game ignores the pad but we still read it, which looked like a menu eating
+    // every press (Mario froze until the next press got through)
+    if let Some(p) = pad.filter(|_| kbd::focused()) {
         let g = p.Gamepad;
         let b = g.wButtons;
         let stick = (g.sThumbLX as i32).abs() > 12000 || (g.sThumbLY as i32).abs() > 12000;
