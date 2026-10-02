@@ -400,27 +400,27 @@ impl ImguiRenderLoop for Overlay {
         // outside the world (title screen, menus, loading): which mod is loaded, bottom left, in
         // SM64's HUD font (it has no dot: a small square at the baseline); only once Mario's files are
         // built and loaded this session (not during the first-launch setup)
-        if !crate::in_world() && crate::assets::ready() {
-            let g = 10.0 * size[1] / 240.0 * SIZE;
-            let text = |text: &str, y: f32, g: f32| {
-                let mut x = size[1] * 0.04;
-                for c in text.chars() {
-                    match c {
-                        ' ' => x += g * 0.5,
-                        '.' => {
-                            let d = g * 0.18;
-                            dl.add_rect([x, y + g - d * 1.6], [x + d, y + g - d * 0.6], [1.0, 1.0, 1.0, 1.0]).filled(true).build();
-                            x += g * 0.35;
+        let g = 10.0 * size[1] / 240.0 * SIZE;
+        let text = |text: &str, y: f32, g: f32| {
+            let mut x = size[1] * 0.04;
+            for c in text.chars() {
+                match c {
+                    ' ' => x += g * 0.5,
+                    '.' => {
+                        let d = g * 0.18;
+                        dl.add_rect([x, y + g - d * 1.6], [x + d, y + g - d * 0.6], [1.0, 1.0, 1.0, 1.0]).filled(true).build();
+                        x += g * 0.35;
+                    }
+                    c => {
+                        if let Some(id) = glyph_for(c) {
+                            image(id, x, y, g, g);
                         }
-                        c => {
-                            if let Some(id) = glyph_for(c) {
-                                image(id, x, y, g, g);
-                            }
-                            x += g * 0.8;
-                        }
+                        x += g * 0.8;
                     }
                 }
-            };
+            }
+        };
+        if !crate::in_world() && crate::assets::ready() {
             let y = size[1] * 0.96 - g;
             text(concat!("ER MARIO ", env!("CARGO_PKG_VERSION")), y, g);
             // smaller, right above the version
@@ -434,6 +434,10 @@ impl ImguiRenderLoop for Overlay {
         let alive = LAST_SET.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|t| t.elapsed().as_secs_f32() < 0.5);
         if wedges == 0xFF || !alive {
             return;
+        }
+        // in game: a small note in the bottom left corner once a newer version is out
+        if let Some(v) = crate::update::newer() {
+            text(&format!("ER MARIO {v} IS OUT"), size[1] * 0.985 - g * 0.5, g * 0.5);
         }
 
         // the coins in the world (up to 40 m away): SM64's 64 units = 0.64 m
