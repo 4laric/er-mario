@@ -10,6 +10,10 @@ int main(void) {
         ACT_PICKING_UP, ACT_DIVE_PICKING_UP, ACT_PICKING_UP_BOWSER,
         ACT_HOLDING_BOWSER, ACT_RELEASING_BOWSER
     };
+    const uint32_t expected_bits[] = {
+        1, 128, 256, 512, 128, 128, 2, 4, 8, 8, 8, 8,
+        16, 16, 32, 32, 64, 64, 64
+    };
     const uint32_t free_actions[] = {
         ACT_JUMP, ACT_FREEFALL, ACT_PUNCHING, ACT_JUMP_KICK,
         ACT_CROUCHING, ACT_WALKING, ACT_DEATH_EXIT, ACT_STAR_DANCE_EXIT,
@@ -18,7 +22,8 @@ int main(void) {
     for (uint32_t unlocked = 0; unlocked < 1024; ++unlocked) {
         sm64_er_ap_set_capabilities(1023, unlocked);
         for (unsigned i = 0; i < sizeof(actions)/sizeof(actions[0]); ++i) {
-            uint32_t a = actions[i], cap = er_ap_action_capability(a);
+            uint32_t a = actions[i], cap = expected_bits[i];
+            assert(er_ap_action_capability(a) == cap);
             if (a == ACT_DIVE_PICKING_UP) cap |= 8;
             int allowed = (cap & ~unlocked) == 0;
             assert((er_ap_filter_action(a, ACT_JUMP) == a) == allowed);
