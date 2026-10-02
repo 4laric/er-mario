@@ -2,6 +2,7 @@
 #include <math.h>
 #include "../../ap_capabilities.h"
 #include "../../ap_stats.h"
+#include "../../er_fludd.h"
 
 #include "../shim.h"
 #include "../include/PR/os_cont.h"
@@ -1717,12 +1718,14 @@ s32 execute_mario_action(UNUSED struct Object *o) {
 
         // If Mario is OOB, stop executing actions.
         if (gMarioState->floor == NULL) {
+            er_fludd_input(0, 0, 0, 0);
             return 0;
         }
 
         // The function can loop through many action shifts in one frame,
         // which can lead to unexpected sub-frame behavior. Could potentially hang
         // if a loop of actions were found, but there has not been a situation found.
+        if (er_fludd_step(gMarioState)) inLoop = FALSE;
         while (inLoop) {
             switch (gMarioState->action & ACT_GROUP_MASK) {
                 case ACT_GROUP_STATIONARY:
@@ -1755,6 +1758,7 @@ s32 execute_mario_action(UNUSED struct Object *o) {
             }
         }
 
+        er_fludd_after(gMarioState);
         sink_mario_in_quicksand(gMarioState);
         squish_mario_model(gMarioState);
         set_submerged_cam_preset_and_spawn_bubbles(gMarioState);

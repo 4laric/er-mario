@@ -1,5 +1,5 @@
 //! Mario rendered by the game itself: the Vagabond chest piece (bd_m_1280, built by
-//! tools/build_mario_parts.py) carries Mario's mesh, each SM64 body part skinned 100% to one
+//! assets/flver.rs) carries Mario's mesh, each SM64 body part skinned 100% to one
 //! skeleton bone with an identity bind. Every frame we write SM64's part matrices into those
 //! bones' model pose (character space), after the game's animation and before rendering.
 
@@ -9,17 +9,11 @@ use glam::{Mat3, Quat, Vec3};
 
 use crate::{explore, log};
 
-/// SM64 part -> skeleton bone (same list as tools/build_mario_parts.py).
-const PART_BONES: [&str; PARTS] = [
-    "", "Pelvis_Mantle", "Spine2", "Neck", "L_ShoulderArmor", "L_Pectoral", "Collar", "R_Shoulder", "R_Pectoral", "Spine2_Mantle", "L_Hip", "SpineArmor1", "Spine_Mantle", "R_Hip", "SpineArmor2", "L_Shoulder",
-    // eye variants (open, half, closed, dead): only the one SM64 is drawing is shown
-    "L_UpArmTwist", "L_Elbow", "L_ForeArmTwist", "L_ForeArmTwist1",
-    // the peace-sign right hand (star dance), shown instead of the fist
-    "R_Elbow",
-];
+/// The asset builder and renderer share one part-to-bone map.
+const PART_BONES: [&str; PARTS] = crate::assets::flver::PART_BONES;
 /// SM64's body parts (0..16) plus the eye variants (16..20).
 pub const SM64_PARTS: usize = 16;
-pub const PARTS: usize = 21;
+pub const PARTS: usize = 28;
 /// SM64's right hand part, and our peace-sign copy of it
 const RIGHT_HAND: usize = 9;
 const PEACE: usize = 20;
@@ -76,6 +70,19 @@ pub fn relative_parts(mats: &[f32], count: i32, mario: [f32; 3], eye_cell: u8, p
         let head = out[HEAD];
         let pos = if cell == eye_cell { head.pos } else { head.pos + head.rot * EYE_TUCK };
         out[SM64_PARTS + k] = PartPose { pos, ..head };
+    }
+    let fludd = crate::ap_fludd::visual();
+    let torso = out[2];
+    for (part, shown) in [
+        (crate::assets::fludd::BODY, fludd.enabled),
+        (crate::assets::fludd::HOVER, fludd.enabled && fludd.selected_nozzle == 1),
+        (crate::assets::fludd::ROCKET, fludd.enabled && fludd.selected_nozzle == 2),
+        (crate::assets::fludd::TURBO, fludd.enabled && fludd.selected_nozzle == 4),
+        (crate::assets::fludd::JETS, fludd.enabled && fludd.active && fludd.selected_nozzle == 1),
+        (crate::assets::fludd::ROCKET_JET, fludd.enabled && fludd.active && fludd.selected_nozzle == 2),
+        (crate::assets::fludd::TURBO_JET, fludd.enabled && fludd.active && fludd.selected_nozzle == 4),
+    ] {
+        out[part] = PartPose { scale: if shown { torso.scale } else { 0.001 }, ..torso };
     }
     Some(out)
 }

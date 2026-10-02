@@ -31,6 +31,7 @@ fn sender() -> &'static Mutex<Sender<Job>> {
             while let Ok(job) = rx.recv() {
                 crate::ap_capabilities::apply();
                 job(&mut ctx);
+                crate::ap_fludd::publish();
             }
         });
         Mutex::new(tx)

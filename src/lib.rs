@@ -23,6 +23,7 @@ mod paths;
 mod sm64;
 mod ap_capabilities;
 mod ap_stats;
+pub(crate) mod ap_fludd;
 mod goldmask;
 mod goldmask_policy;
 mod hud_install_lock;
@@ -153,6 +154,11 @@ fn xinput_filter(index: u32, state: *mut XINPUT_STATE, rc: u32) -> u32 {
         if !ON_LADDER.load(Ordering::Relaxed) {
             g.sThumbLX = 0;
             g.sThumbLY = 0;
+        }
+        if ap_fludd::visual().enabled {
+            let selecting = g.wButtons.contains(XINPUT_GAMEPAD_RIGHT_SHOULDER);
+            g.wButtons &= !XINPUT_GAMEPAD_RIGHT_SHOULDER;
+            if selecting { g.wButtons &= !(XINPUT_GAMEPAD_DPAD_UP | XINPUT_GAMEPAD_DPAD_DOWN | XINPUT_GAMEPAD_DPAD_RIGHT | XINPUT_GAMEPAD_DPAD_LEFT); }
         }
         // with the SM64 camera the right stick is Lakitu's C-buttons, not Elden Ring's camera
         if lakitu::ON.load(Ordering::Relaxed) {
@@ -1630,6 +1636,9 @@ fn frame(data: &FD4TaskData) {
         None
     };
     hud::set(wedges.min(ap_stats::max_wedges() as u8), hide_why, true);
+    if (hide_why.is_some() || FOLLOWING.load(Ordering::Relaxed)) && ap_fludd::visual().enabled {
+        worker::call("FLUDD suspended", |_| { unsafe { sm64::sm64_er_fludd_input(0, 0, 0, 0) }; ap_fludd::publish(); });
+    }
     // the tail swing: watch the bosses' stance, carry / throw / fly the grabbed one
     swing::watch_stances(&combat::boss_handles());
     {
@@ -1788,6 +1797,9 @@ fn frame(data: &FD4TaskData) {
     // itself (frame below). Stepping it here as well ran Mario at up to twice the speed there.
     let paused = paused || FOLLOWING.load(Ordering::Relaxed);
     if paused {
+        if ap_fludd::visual().enabled && hide_why.is_none() && !FOLLOWING.load(Ordering::Relaxed) {
+            worker::call("FLUDD paused", |_| unsafe { sm64::sm64_er_fludd_input(0, 0, 0, 0) });
+        }
         m.acc = 0.0;
         // SM64's sound keeps going while the world is paused (queued sounds would wait otherwise)
         static AUDIO_ACC: Mutex<f32> = Mutex::new(0.0);
@@ -1806,6 +1818,9 @@ fn frame(data: &FD4TaskData) {
     while m.acc >= 1.0 / 30.0 {
         m.acc -= 1.0 / 30.0;
         SM64_TICKS.fetch_add(1, Ordering::Relaxed);
+        let mut fludd_held = false;
+        let mut fludd_select = 0u32;
+        let mut fludd_cycle = false;
         let mut inputs = sm64::SM64MarioInputs::default();
         if let Some(p) = pad.filter(|_| !m.dead) {
             let g = p.Gamepad;
@@ -1815,6 +1830,13 @@ fn frame(data: &FD4TaskData) {
             };
             inputs.stick_x = axis(g.sThumbLX);
             inputs.stick_y = -axis(g.sThumbLY);
+            fludd_held = g.wButtons.contains(XINPUT_GAMEPAD_RIGHT_SHOULDER);
+            if fludd_held {
+                if g.wButtons.contains(XINPUT_GAMEPAD_DPAD_UP) { fludd_select = ap_fludd::HOVER; }
+                else if g.wButtons.contains(XINPUT_GAMEPAD_DPAD_DOWN) { fludd_select = ap_fludd::ROCKET; }
+                else if g.wButtons.contains(XINPUT_GAMEPAD_DPAD_RIGHT) { fludd_select = ap_fludd::TURBO; }
+                fludd_cycle = g.wButtons.contains(XINPUT_GAMEPAD_DPAD_LEFT);
+            }
             inputs.button_a = g.wButtons.contains(XINPUT_GAMEPAD_A) as u8;
             inputs.button_b = (g.wButtons.contains(XINPUT_GAMEPAD_X) || g.wButtons.contains(XINPUT_GAMEPAD_B)) as u8;
             inputs.button_z = (g.wButtons.contains(XINPUT_GAMEPAD_LEFT_SHOULDER) || g.bLeftTrigger > 100) as u8;
@@ -1836,6 +1858,8 @@ fn frame(data: &FD4TaskData) {
                 inputs.button_a |= k.a as u8;
                 inputs.button_b |= k.b as u8;
                 inputs.button_z |= k.z as u8;
+                fludd_held |= k.fludd;
+                fludd_cycle |= k.nozzle;
             }
         }
         if let Ok(cam) = unsafe { CSCamera::instance() } {
@@ -1995,6 +2019,7 @@ fn frame(data: &FD4TaskData) {
         let stagger_cue = swing::take_cue();
         let action_before = m.state.action;
         let alive = !m.dead;
+        let fludd_allowed = alive && kbd::focused() && !MENU_OPEN.load(Ordering::Relaxed) && !FOLLOWING.load(Ordering::Relaxed) && !lakitu::first_person();
         let hurt_from = targets
             .iter()
             .min_by(|a, b| {
@@ -2099,11 +2124,16 @@ fn frame(data: &FD4TaskData) {
                 unsafe { sm64::sm64_set_mario_health(id, ap_stats::full_health()) };
                 unsafe { sm64::sm64_play_sound_global(SOUND_HEART) };
             }
+            unsafe {
+                sm64::sm64_er_fludd_input(fludd_allowed as u32, fludd_held as u32, fludd_select, fludd_cycle as u32);
+                if rested { sm64::sm64_er_fludd_refill(); }
+            }
             let mut state = sm64::SM64MarioState::default();
             {
                 let mut buffers = ctx.geo.buffers();
                 unsafe { sm64::sm64_mario_tick(id, &inputs, &mut state, &mut *buffers) };
             }
+            ap_fludd::publish();
             // SM64's sound engine runs at the same 30 Hz as Mario
             let mut buf = [0i16; 544 * 2 * 2];
             let frames = unsafe { sm64::sm64_audio_tick(audio::queued(), 1100, buf.as_mut_ptr()) } as usize;

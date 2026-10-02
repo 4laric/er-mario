@@ -8,13 +8,16 @@ use std::collections::HashMap;
 use super::model::{MarioModel, Tri};
 
 /// SM64 part -> FLVER bone (bones the chest piece skins natively); same list as engine_mario.rs.
-pub const PART_BONES: [&str; 21] = [
+pub const PART_BONES: [&str; 28] = [
     "", "Pelvis_Mantle", "Spine2", "Neck", "L_ShoulderArmor", "L_Pectoral", "Collar", "R_Shoulder", "R_Pectoral",
     "Spine2_Mantle", "L_Hip", "SpineArmor1", "Spine_Mantle", "R_Hip", "SpineArmor2", "L_Shoulder",
     // eye variants (open, half, closed, dead)
     "L_UpArmTwist", "L_Elbow", "L_ForeArmTwist", "L_ForeArmTwist1",
     // the peace-sign right hand (star dance)
     "R_Elbow",
+    // Original FLUDD body, three nozzle variants and water streams.
+    "R_ForeArmTwist", "R_ForeArmTwist1", "R_UpArmTwist", "R_UpArmTwist1", "L_UpArmTwist1",
+    "L_Clavicle", "R_Clavicle",
 ];
 /// SM64 units -> metres, times Mario's 0.25 model scale
 const UNIT: f64 = 0.01 * 0.25;
@@ -254,6 +257,7 @@ pub fn mario_vertices(model: &MarioModel) -> (Vec<Vertex>, Vec<[u16; 3]>) {
             tris.push(tri);
         }
     }
+    super::fludd::append(&mut verts, &mut tris);
     (verts, tris)
 }
 

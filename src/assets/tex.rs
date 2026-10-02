@@ -102,6 +102,16 @@ pub fn mario_albedo(model: &MarioModel) -> Image {
             }
         }
     }
+    // Original backpack colours occupy a spare strip between Mario's texture bands and swatches.
+    for (i, color) in super::fludd::COLORS.iter().enumerate() {
+        let cx = super::fludd::SWATCH_X[i];
+        let cy = super::fludd::SWATCH_Y;
+        for y in cy - 16..cy + 16 {
+            for x in cx - 16..cx + 16 {
+                img.px[y * SIZE + x] = *color;
+            }
+        }
+    }
     img
 }
 

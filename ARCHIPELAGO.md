@@ -132,3 +132,43 @@ combinations, damage policy and meter ratio. `tests/ap_stats.c` runs the product
 health policy across every capacity and health value, including death, drowning,
 healing, draining and capacity reset. Windows CI runs these before the full DLL
 compile. New stats behavior still requires live gameplay validation.
+
+## Optional FLUDD extension
+
+Base ABI v1 remains unchanged. Immutable base flag32 advertises two additional
+exports: `er_mario_ap_set_fludd(enabled, nozzles, tank_level) -> u32` and
+`er_mario_ap_get_fludd_state(out: *mut FluddState) -> u32`. All arguments and
+fields are u32. The seven-field, 28-byte state is `abi_version`, `flags`,
+`unlocked_nozzles`, `tank_level`, `selected_nozzle`, `water_units`, `capacity_units`.
+Flags1/2/4 mean live Mario ready, applied FLUDD enabled, exact worker-applied
+configuration. Flag2 refers to FLUDD, unlike base state flag2. Nozzle mask values
+are Hover1, Rocket2, Turbo4; selected nozzle uses those same values or0. Unknown
+bits, enabled above1 and tier above3 are rejected; disabled requires mask0/tier0.
+Null outputs are rejected. The setter queues a snapshot without touching SM64;
+the getter reads an atomic copy. Configuration and visual generation must both
+match before the applied flag is published.
+
+Standalone `fludd = on` in er_mario.ini enables all three nozzles at tier0;
+default is off. An AP setter request overrides the INI. RB activates; holding RB
+and pressing D-pad up/down/right selects Hover/Rocket/Turbo, and RB+left cycles.
+Keyboard J activates and I cycles. These extra keys are hidden from ER only
+while FLUDD is enabled in Mario gameplay; menu keys remain available. The AP
+client's general GetAsyncKeyState capture prevents activation while typing.
+
+Capacity is60+20 per tier. Hover and Turbo spend1 per powered tick; Rocket
+charges30 ticks then spends60 and launches with vertical velocity110. Turbo
+charges20 ticks, accelerates15 per tick up to100. Hover adds vertical thrust5,
+bounds fast falls at-10, and steers within native collision steps. Idle grounded
+refill restores1 per tick with activation released. Grace/star restoration and
+Mario creation refill fully; item replay and tank upgrades preserve current
+water and current selection/charge. Menus, focus loss, damage, death, carrying,
+swimming and forced game actions suspend activation without regenerating fuel.
+
+The backpack and nozzle meshes are original procedural geometry generated in
+local armor buffers. No CoopDX Lua, DynOS meshes, artwork or sounds are copied.
+Squirt is deliberately absent: the inspected v2 source has no spray behavior.
+Asset schema3 triggers local regeneration; generated game/ROM assets remain
+private. Tests cover atomic ABI application, all nozzle/tier combinations,
+fuel/charge/replay/upgrade/relock/cancel policy, native movement dispatcher seams,
+OFF state parity and geometry budgets. Live controls, movement feel, collision
+interaction and visual placement still need gameplay verification.

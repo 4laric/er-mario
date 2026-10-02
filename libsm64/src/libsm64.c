@@ -5,6 +5,7 @@
 #include "libsm64.h"
 #include "ap_capabilities.h"
 #include "ap_stats.h"
+#include "er_fludd.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -53,6 +54,15 @@ struct MarioInstance
     struct GlobalState *globalState;
 };
 struct ObjPool s_mario_instance_pool = { 0, 0 };
+
+/* Internal worker-only FLUDD entry points, intentionally not DLL exports. */
+void sm64_er_fludd_configure(uint32_t enabled, uint32_t mask, uint32_t level) { er_fludd_configure(enabled, mask, level); }
+void sm64_er_fludd_input(uint32_t allowed, uint32_t held, uint32_t select, uint32_t cycle) { er_fludd_input(allowed, held, select, cycle); }
+void sm64_er_fludd_refill(void) { er_fludd.water = er_fludd.enabled ? er_fludd.capacity : 0; }
+void sm64_er_fludd_get_state(uint32_t *out) {
+    out[0] = er_fludd.enabled; out[1] = er_fludd.selected; out[2] = er_fludd.active;
+    out[3] = er_fludd.water; out[4] = er_fludd.capacity;
+}
 
 /* Internal worker-only entry point; the public Rust ABI queues the request. */
 void sm64_er_ap_set_max_wedges(uint32_t wedges) {
@@ -185,6 +195,7 @@ SM64_LIB_FN void sm64_static_surfaces_load( const struct SM64Surface *surfaceArr
 
 SM64_LIB_FN int32_t sm64_mario_create( float x, float y, float z )
 {
+    er_fludd_reset();
     int32_t marioIndex = obj_pool_alloc_index( &s_mario_instance_pool, sizeof( struct MarioInstance ));
     struct MarioInstance *newInstance = s_mario_instance_pool.objects[marioIndex];
 
@@ -295,6 +306,7 @@ SM64_LIB_FN void sm64_mario_tick( int32_t marioId, const struct SM64MarioInputs 
 
 SM64_LIB_FN void sm64_mario_delete( int32_t marioId )
 {
+    er_fludd_input(0, 0, 0, 0);
     if( marioId >= s_mario_instance_pool.size || s_mario_instance_pool.objects[marioId] == NULL )
     {
         DEBUG_PRINT("Tried to delete non-existant Mario with ID: %u", marioId);
