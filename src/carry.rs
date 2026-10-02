@@ -46,6 +46,10 @@ static START: AtomicBool = AtomicBool::new(false);
 /// Mario must let go (the enemy is gone or died)
 static DROP: AtomicBool = AtomicBool::new(false);
 
+pub fn holding() -> bool {
+    matches!(*PHASE.lock().unwrap_or_else(|e| e.into_inner()), Phase::Held { .. })
+}
+
 fn key(h: &FieldInsHandle) -> u64 {
     unsafe { std::mem::transmute_copy::<FieldInsHandle, u64>(h) }
 }

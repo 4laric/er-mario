@@ -9,6 +9,8 @@ mod carry;
 mod collision;
 mod coins;
 mod combat;
+mod flask;
+mod flask_policy;
 mod engine_mario;
 mod equip;
 mod kbd;
@@ -294,6 +296,8 @@ struct MarioState {
     parts: Option<[engine_mario::PartPose; engine_mario::PARTS]>,
     combat: combat::Combat,
     addon_hits: addon_hitboxes::Hitboxes,
+    flask: flask_policy::Tracker,
+    flask_heal: u8,
     /// the Tarnished died: Mario plays SM64's death until the game respawns the player
     dead: bool,
     /// lifts, doors and other moving collision as SM64 surface objects
@@ -961,6 +965,9 @@ static CUTSCENE_HIDE: AtomicBool = AtomicBool::new(false);
 
 /// Set by input_task when the player pressed interact; frame() then watches for an event animation.
 static INTERACT_PRESSED: AtomicBool = AtomicBool::new(false);
+/// Native item use is admitted only during safe grounded Mario gameplay.
+static FLASK_ALLOWED: AtomicBool = AtomicBool::new(false);
+static FLASK_REQUEST_ANIM: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
 /// Elden Ring's ladder animations (getting on, climbing, sliding, getting off).
 fn ladder_anim(anim: i32) -> bool {
     (28000..29000).contains(&anim) || (51100..51200).contains(&anim)
@@ -1000,13 +1007,14 @@ static ON_LADDER: AtomicBool = AtomicBool::new(false);
 
 /// Runs right after the game turned the pad into character actions (ChrIns_PreBehaviorSafe):
 /// detects menus (buttons pressed but nothing reaches the character) and strips every action but
-/// interact from the Tarnished, so he never rolls, attacks or jumps on Mario's buttons.
+/// interact and item use from the Tarnished, so he never rolls, attacks or jumps on Mario's buttons.
 fn input_task() {
     if !ENABLED.load(Ordering::Relaxed) {
         MENU_OPEN.store(false, Ordering::Relaxed);
         return;
     }
     let Some(player) = (unsafe { WorldChrMan::instance_mut() }).ok().and_then(|w| w.main_player.as_mut()) else { return };
+    let before_anim = current_anim(&player.chr_ins);
     let pad = PAD.lock().unwrap_or_else(|e| e.into_inner()).filter(|(_, t)| t.elapsed().as_secs_f32() < 0.25).map(|(p, _)| p);
     let req: &mut eldenring::cs::CSChrActionRequestModule = &mut player.chr_ins.modules.action_request;
     let bits = |a: &mut eldenring::cs::ChrActions| unsafe { &mut *(a as *mut _ as *mut u64) };
@@ -1070,6 +1078,9 @@ fn input_task() {
         MENU_OPEN.store(inferred_menu, Ordering::Relaxed);
     }
     const ACTION: u64 = 1 << 4; // interact (doors, chests, graces, messages...)
+    const USE_ITEM: u64 = 1 << 7;
+    const CHANGE_ITEM: u64 = 1 << 11;
+    let allow_item = FLASK_ALLOWED.load(Ordering::Relaxed);
     // research (debug): which action bits a press makes, to find what NPC dialogue listens to
     if debug() {
         static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -1089,13 +1100,16 @@ fn input_task() {
     if *bits(&mut req.new_action_presses) & ACTION != 0 {
         INTERACT_PRESSED.store(true, Ordering::Relaxed);
     }
+    if allow_item && *bits(&mut req.new_action_presses) & USE_ITEM != 0 {
+        FLASK_REQUEST_ANIM.store(before_anim, Ordering::Relaxed);
+    }
     for a in [
         &mut req.action_requests,
         &mut req.new_action_presses,
         &mut req.queued_action_inputs,
         &mut req.cancel_ready_actions,
     ] {
-        *bits(a) &= ACTION;
+        *bits(a) &= ACTION | CHANGE_ITEM | if allow_item { USE_ITEM } else { 0 };
     }
 }
 
@@ -1141,6 +1155,7 @@ impl Drop for DrawTimer {
 }
 
 fn frame(data: &FD4TaskData) {
+    FLASK_ALLOWED.store(false, Ordering::Relaxed);
     {
         let mut p = PERF.lock().unwrap_or_else(|e| e.into_inner());
         p.frames += 1;
@@ -1520,6 +1535,8 @@ fn frame(data: &FD4TaskData) {
             parts: None,
             combat: combat::Combat::new(),
             addon_hits: addon_hitboxes::Hitboxes::new(),
+            flask: flask_policy::Tracker::default(),
+            flask_heal: 0,
             dead: false,
             moving,
             stuck_ticks: 0,
@@ -1658,6 +1675,20 @@ fn frame(data: &FD4TaskData) {
         None
     };
     hud::set(wedges.min(ap_stats::max_wedges() as u8), hide_why, true);
+    let flask_ready = hide_why.is_none() && !FOLLOWING.load(Ordering::Relaxed) && !lakitu::first_person()
+        && m.state.health >= 0x100 && m.state.action & ((1 << 11) | (1 << 12) | (1 << 13) | (1 << 14) | (1 << 17) | (1 << 20) | (1 << 21) | (1 << 23)) == 0
+        && !carry::holding() && !swing::holding();
+    FLASK_ALLOWED.store(flask_ready, Ordering::Relaxed);
+    let request = FLASK_REQUEST_ANIM.swap(-1, Ordering::Relaxed);
+    let sample = flask_ready.then(flask::snapshot).flatten();
+    if let Some(sample) = sample { hud::set_flask(sample.total, sample.allocation); }
+    let consumed = m.flask.observe(sample, (request != -1).then_some(request), flask::queued(player_ref), current_anim(&player_ref.chr_ins), data.delta_time.time);
+    if let Some(item) = consumed {
+        let heal = flask::healing(player_ref, item);
+        m.flask_heal = m.flask_heal.saturating_add(heal);
+        log(format!("flask: native Crimson charge consumed, Mario healing {heal} quarter-wedges"));
+    }
+    if !flask_ready { m.flask_heal = 0; }
     if (hide_why.is_some() || FOLLOWING.load(Ordering::Relaxed)) && (ap_fludd::visual().enabled || ap_cappy::visual().enabled || ap_sonic::visual().enabled) {
         m.addon_hits.reset();
         worker::call("addon movement suspended", |_| { unsafe { sm64::sm64_er_fludd_input(0, 0, 0, 0); sm64::sm64_er_addons_input(0, 0, 0, 0); }; ap_fludd::publish(); });
@@ -1868,7 +1899,8 @@ fn frame(data: &FD4TaskData) {
                 else if g.wButtons.contains(XINPUT_GAMEPAD_DPAD_LEFT) { fludd_select = ap_fludd::SQUIRT; }
             }
             inputs.button_a = g.wButtons.contains(XINPUT_GAMEPAD_A) as u8;
-            inputs.button_b = (g.wButtons.contains(XINPUT_GAMEPAD_X) || g.wButtons.contains(XINPUT_GAMEPAD_B)) as u8;
+            // X is native item use; B remains Mario's punch/grab/throw.
+            inputs.button_b = g.wButtons.contains(XINPUT_GAMEPAD_B) as u8;
             inputs.button_z = (g.wButtons.contains(XINPUT_GAMEPAD_LEFT_SHOULDER) || g.bLeftTrigger > 100) as u8;
         }
         // SM64's first-person view: Mario stands still, the stick looks around
@@ -1910,6 +1942,11 @@ fn frame(data: &FD4TaskData) {
                 inputs.cam_look_x = -inputs.cam_look_x;
                 inputs.cam_look_z = -inputs.cam_look_z;
             }
+        }
+        let flask_pose = m.flask.pose();
+        if flask_pose.is_some() {
+            inputs = sm64::SM64MarioInputs { cam_look_x: inputs.cam_look_x, cam_look_z: inputs.cam_look_z, ..Default::default() };
+            fludd_held = false; cap_held = false; spin_held = false; air_dash = false;
         }
         m.ticks += 1;
         let moving_changed = m.moving.update(&mut m.havok, m.origin, m.state.position);
@@ -2046,6 +2083,7 @@ fn frame(data: &FD4TaskData) {
         };
         let rested = !m.dead && REST.swap(false, Ordering::Relaxed);
         let health_before = m.state.health;
+        let flask_heal = std::mem::take(&mut m.flask_heal);
         let head = lakitu::head();
         let grab = swing::take_start();
         let pick_up = carry::take_start();
@@ -2053,7 +2091,7 @@ fn frame(data: &FD4TaskData) {
         let stagger_cue = swing::take_cue();
         let action_before = m.state.action;
         let alive = !m.dead;
-        let fludd_allowed = alive && kbd::focused() && !MENU_OPEN.load(Ordering::Relaxed) && !FOLLOWING.load(Ordering::Relaxed) && !lakitu::first_person();
+        let fludd_allowed = alive && flask_pose.is_none() && kbd::focused() && !MENU_OPEN.load(Ordering::Relaxed) && !FOLLOWING.load(Ordering::Relaxed) && !lakitu::first_person();
         let hurt_from = targets
             .iter()
             .min_by(|a, b| {
@@ -2128,6 +2166,10 @@ fn frame(data: &FD4TaskData) {
                 unsafe { sm64::sm64_mario_heal(id, (4 * kills).min(32) as u8) };
                 unsafe { sm64::sm64_play_sound_global(SOUND_COIN) };
             }
+            if alive && flask_heal > 0 {
+                unsafe { sm64::sm64_mario_heal(id, flask_heal) };
+                unsafe { sm64::sm64_play_sound_global(SOUND_HEART) };
+            }
             // Bowser's tail swing: Mario grabs the boss (SM64's pickup, swing and throw follow)
             if grab {
                 unsafe { sm64::sm64_set_mario_action(id, swing::ACT_PICKING_UP_BOWSER) };
@@ -2187,7 +2229,8 @@ fn frame(data: &FD4TaskData) {
             let right_hand = tri_part[..ctx.geo.used()].iter().filter(|&&p| p == 9).count();
             let peace = right_hand > engine_mario::FIST_TRIANGLES;
             let eye_cell = eye_cell(&ctx.geo.uv, ctx.geo.used());
-            let parts = engine_mario::relative_parts(&mats, count, state.position, eye_cell, peace);
+            let mut parts = engine_mario::relative_parts(&mats, count, state.position, eye_cell, peace);
+            if let (Some(parts), Some(progress)) = (parts.as_mut(), flask_pose) { engine_mario::flask_pose(parts, progress); }
             let hits = if alive { combat::hits(id, &state, &target_pos, &no_stomp) } else { Vec::new() };
             (state, ctx.geo.position[..n].to_vec(), ctx.geo.color[..n].to_vec(), ctx.geo.normal[..n].to_vec(), parts, hits)
         });

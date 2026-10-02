@@ -13,7 +13,7 @@ use crate::{explore, log};
 const PART_BONES: [&str; PARTS] = crate::assets::flver::PART_BONES;
 /// SM64's body parts (0..16) plus the eye variants (16..20).
 pub const SM64_PARTS: usize = 16;
-pub const PARTS: usize = 30;
+pub const PARTS: usize = 31;
 /// SM64's right hand part, and our peace-sign copy of it
 const RIGHT_HAND: usize = 9;
 const PEACE: usize = 20;
@@ -111,7 +111,55 @@ pub fn relative_parts(mats: &[f32], count: i32, mario: [f32; 3], eye_cell: u8, p
     out[HEAD] = PartPose { scale: if capped { head.scale } else { 0.001 }, ..head };
     out[crate::assets::cappy::CAP] = PartPose { scale: if flying_cap { cap.scale } else { 0.001 }, ..cap };
     out[crate::assets::cappy::BARE_HEAD] = PartPose { scale: if bare { head.scale } else { 0.001 }, ..head };
+    out[crate::assets::addons::FLASK] = PartPose { scale: 0.001, ..out[RIGHT_HAND] };
     Some(out)
+}
+
+/// Presentation only: raise the native right arm, sip, then lower it during a flask drink.
+/// Call after relative_parts for an active drink; otherwise its default pose hides the bottle.
+pub fn flask_pose(parts: &mut [PartPose; PARTS], progress: f32) {
+    if !progress.is_finite() { return; }
+    let p = progress.clamp(0.0, 1.0);
+    let rise = (p / 0.30).min(1.0);
+    let lower = ((1.0 - p) / 0.25).min(1.0);
+    let t = rise.min(lower);
+    let t = t * t * (3.0 - 2.0 * t);
+    // Use the visible native head's transform even when Cappy has hidden its capped mesh.
+    let head = parts[HEAD];
+    let shoulder = parts[7];
+    let elbow = parts[8];
+    let hand = parts[RIGHT_HAND];
+    let bottle_rot = hand.rot.slerp(head.rot * Quat::from_rotation_z(-0.55), t);
+    let mouth = head.pos + head.rot * Vec3::new(-0.05, 0.22, 0.0);
+    let target = mouth - bottle_rot * Vec3::from_array(crate::assets::addons::FLASK_MOUTH);
+    let a = shoulder.pos.distance(elbow.pos);
+    let b = elbow.pos.distance(hand.pos);
+    let mut wrist = hand.pos.lerp(target, t);
+    if a > 0.001 && b > 0.001 {
+        let direction = (wrist - shoulder.pos).normalize_or_zero();
+        let distance = shoulder.pos.distance(wrist).clamp((a - b).abs() + 0.0001, a + b - 0.0001);
+        wrist = shoulder.pos + direction * distance;
+        let along = (a*a - b*b + distance*distance) / (2.0 * distance);
+        let height = (a*a - along*along).max(0.0).sqrt();
+        let mut bend = elbow.pos - shoulder.pos;
+        bend = (bend - direction * bend.dot(direction)).normalize_or_zero();
+        if bend.length_squared() < 0.1 {
+            let forward = head.rot * Vec3::Y;
+            bend = (forward - direction * forward.dot(direction)).normalize_or_zero();
+        }
+        let joint = shoulder.pos + direction * along + bend * height;
+        let orient = |old: Vec3, new: Vec3| {
+            if old.length_squared() > 1e-8 && new.length_squared() > 1e-8 {
+                Quat::from_rotation_arc(old.normalize(), new.normalize())
+            } else { Quat::IDENTITY }
+        };
+        parts[7].rot = orient(elbow.pos - shoulder.pos, joint - shoulder.pos) * shoulder.rot;
+        parts[8].rot = orient(hand.pos - elbow.pos, wrist - joint) * elbow.rot;
+        parts[8].pos = joint;
+    }
+    parts[RIGHT_HAND] = PartPose { rot: bottle_rot, pos: wrist, scale: 1.0 };
+    parts[PEACE].scale = 0.001;
+    parts[crate::assets::addons::FLASK] = PartPose { rot: bottle_rot, pos: wrist, scale: 1.0 };
 }
 
 fn squirt_stream_pose(torso: PartPose) -> PartPose {
@@ -119,6 +167,35 @@ fn squirt_stream_pose(torso: PartPose) -> PartPose {
     let scale = torso.scale * crate::assets::fludd::SQUIRT_STREAM_SCALE;
     let mouth = Vec3::from_array(crate::assets::fludd::STREAM_MOUTH);
     PartPose { rot, scale, pos: torso.pos + rot * mouth * (torso.scale - scale) }
+}
+
+#[cfg(test)]
+mod flask_tests {
+    use super::*;
+    #[test]
+    fn sip_pose_preserves_arm_lengths_and_returns_to_the_native_hand() {
+        let base = PartPose { rot: Quat::IDENTITY, pos: Vec3::ZERO, scale: 1.0 };
+        let mut original = [base; PARTS];
+        original[HEAD].pos = Vec3::new(-0.3, 0.0, 0.0);
+        original[7].pos = Vec3::new(0.0, 0.0, 0.20);
+        original[8].pos = Vec3::new(0.20, 0.0, 0.20);
+        original[RIGHT_HAND].pos = Vec3::new(0.35, 0.10, 0.20);
+        let upper = original[7].pos.distance(original[8].pos);
+        let lower = original[8].pos.distance(original[RIGHT_HAND].pos);
+        for progress in [0.0, 0.15, 0.4, 0.7, 0.9, 1.0] {
+            let mut parts = original;
+            flask_pose(&mut parts, progress);
+            assert!((parts[7].pos.distance(parts[8].pos) - upper).abs() < 1e-4);
+            assert!((parts[8].pos.distance(parts[RIGHT_HAND].pos) - lower).abs() < 1e-4);
+            let flask = parts[crate::assets::addons::FLASK];
+            assert!(flask.pos.is_finite() && flask.rot.is_finite());
+            assert!(flask.pos.distance(parts[RIGHT_HAND].pos) < 1e-5);
+            if progress == 0.0 || progress == 1.0 {
+                assert!(parts[RIGHT_HAND].pos.distance(original[RIGHT_HAND].pos) < 1e-4);
+            }
+            assert_eq!(parts[HEAD].pos, original[HEAD].pos);
+        }
+    }
 }
 
 /// The damage beam uses the exact endpoints of the displayed nozzle stream.

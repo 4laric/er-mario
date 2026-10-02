@@ -18,6 +18,8 @@ mod model {
 fn log(_: impl AsRef<str>) {}
 #[path = "../src/assets/bnd4.rs"]
 mod bnd4;
+#[path = "../src/assets/addons.rs"]
+mod addons;
 #[path = "../src/assets/cappy.rs"]
 mod cappy;
 #[path = "../src/assets/fludd.rs"]
@@ -69,7 +71,7 @@ fn native_geometry_is_preserved_and_rest_and_flight_never_show_two_heads() {
     assert_eq!(cappy::shown_parts(false), (true, false, false));
     assert_eq!(cappy::shown_parts(true), (false, true, true));
     assert_eq!(cappy::shown_parts(false), (true, false, false));
-    assert_eq!(flver::PART_BONES.len(), 30);
+    assert_eq!(flver::PART_BONES.len(), 31);
 }
 
 #[test]

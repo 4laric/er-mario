@@ -207,6 +207,8 @@ static WEDGES: AtomicU8 = AtomicU8::new(0xFF);
 static DEATHS: AtomicU32 = AtomicU32::new(0);
 static COINS: AtomicU32 = AtomicU32::new(0);
 static STARS: AtomicU32 = AtomicU32::new(0);
+// Pack both flask counts in one snapshot so rendering cannot mix frames.
+static FLASK: AtomicU32 = AtomicU32::new(0);
 /// when the Mario frame last reported (the HUD goes when it stops, e.g. on a loading screen)
 static LAST_SET: Mutex<Option<Instant>> = Mutex::new(None);
 
@@ -239,6 +241,11 @@ pub fn set_counters(deaths: u32, coins: u32, stars: u32) {
     DEATHS.store(deaths, Ordering::Relaxed);
     COINS.store(coins, Ordering::Relaxed);
     STARS.store(stars, Ordering::Relaxed);
+}
+
+/// Updates the Crimson flask counter; a zero capacity hides its label.
+pub fn set_flask(current: u32, max: u8) {
+    FLASK.store(current.min(u32::from(max)) | (u32::from(max) << 8), Ordering::Relaxed);
 }
 
 /// An enemy health bar (combat.rs): feet position, HP now and before the combo (0..1), combo damage.
@@ -494,6 +501,15 @@ impl ImguiRenderLoop for Overlay {
             let name = match fludd.selected_nozzle { 1 => "Hover", 2 => "Rocket", 4 => "Turbo", 8 => "Squirt", _ => "Locked" };
             dl.add_text([size[0] * 0.5 + 50.0 * px, size[1] - 65.0 * px], [0.3, 0.85, 1.0, 1.0],
                 format!("FLUDD {name} {}/{}  RB / J", fludd.water_units, fludd.capacity_units));
+        }
+
+        let flask = FLASK.load(Ordering::Relaxed);
+        let flask_max = flask >> 8;
+        if flask_max > 0 {
+            // Share the addon column, with a separate row beneath FLUDD when it is enabled.
+            let y = size[1] - 65.0 * px + if fludd.enabled { (10.0 * px).max(20.0) } else { 0.0 };
+            dl.add_text([size[0] * 0.5 + 50.0 * px, y], [1.0, 0.45, 0.4, 1.0],
+                format!("Flask {}/{}  X / R", flask & 0xFF, flask_max));
         }
 
         // enemy health bars (Elden Ring's style: dark frame, red HP, yellow for the combo's damage)

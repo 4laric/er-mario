@@ -34,6 +34,10 @@ jobs:
           $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
           $env:CC_x86_64_pc_windows_msvc = 'clang-cl'
           clang-cl --version
+          rustc --edition=2024 --test src/flask_policy.rs -o flask_policy_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./flask_policy_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           rustc --edition=2024 --test tests/ap_bridge.rs -o ap_bridge_tests.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./ap_bridge_tests.exe

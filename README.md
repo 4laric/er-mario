@@ -38,9 +38,28 @@ work through Steam Input, which Steam turns on for them by default.
 
 **Stay offline.** me3 starts the game offline with anti-cheat off. Never play this mod online.
 
+## Crimson Flasks (experimental AP fork builds)
+
+Crimson Flasks now heal Mario using the game's normal charges. Equip a Crimson Flask
+in a quick slot and press **X** on a controller or **R** on the keyboard; **B** remains
+Mario's punch/grab/throw. D-pad Down selects the next quick item; pouch flask use
+also follows the native game path. Drinking raises a little amber flask to his mouth,
+stops Mario's movement and addon inputs, and leaves him vulnerable to interruption.
+Only a successfully consumed Crimson charge heals: empty attempts and Cerulean
+Flasks do not refill Mario's health. The base flask heals two wedges, increasing with
+native potency to about six and a half at +12, capped by Mario's health capacity.
+No Flask traps and native flask recovery modifiers also apply.
+
+Archipelago's existing **Progressive Flask Upgrade** supplies additional charges
+and Sacred Tears; upgrade potency at a grace as usual. Mario reads the actual flask
+without a separate AP item, charge pool or item-ID swap. Rests and native refills
+restore charges normally. This build changes generated assets and requires the
+usual setup restart before the flask model appears.
+
 ## FLUDD (experimental AP fork builds)
 
 This fork includes an original FLUDD backpack with Hover, Rocket, Turbo and Squirt nozzles.
+
 Set `fludd = on` in `er_mario.ini` to enable all four for standalone play. Archipelago
 controls FLUDD and its unlocks when connected; enable `mario_fludd` in your player YAML.
 These changes are development builds, not part of the upstream release linked above.
