@@ -89,7 +89,7 @@ impl Moving {
                 let w = t.map(|v| sm(origin, q * v + p));
                 let local = w.map(|v| (v - center).round().to_array().map(|x| x as i32));
                 let mid = convex_middle.map(|mid| (mid - center).to_array());
-                if let Some(v) = crate::collision_geometry::surface_vertices(local, mid) {
+                if let Some(v) = crate::collision_geometry::surface_vertices(local, mid, None) {
                     surfaces.push(sm64::SM64Surface::grass(v));
                 }
             }
