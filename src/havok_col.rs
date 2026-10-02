@@ -705,7 +705,13 @@ impl HavokCollision {
         }
         if out.len() > MAX_TRIS {
             out.sort_by(|a, b| {
-                let d = |t: &(Tri, u32, u32)| ((t.0[0] + t.0[1] + t.0[2]) / 3.0 - center).length_squared();
+                // distance to the triangle's box, not its centre: a big floor tri under Mario
+                // has its centre metres away and got cut first
+                let d = |t: &(Tri, u32, u32)| {
+                    let lo = t.0[0].min(t.0[1]).min(t.0[2]);
+                    let hi = t.0[0].max(t.0[1]).max(t.0[2]);
+                    (center.clamp(lo, hi) - center).length_squared()
+                };
                 d(a).total_cmp(&d(b))
             });
             out.truncate(MAX_TRIS);
