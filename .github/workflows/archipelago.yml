@@ -82,10 +82,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./addon_hitboxes_tests.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          rustc --edition=2024 --test src/movement_guard.rs -o movement_guard_tests.exe
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ./movement_guard_tests.exe
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           rustc --edition=2024 --test src/throw_collision.rs -o throw_collision_tests.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./throw_collision_tests.exe

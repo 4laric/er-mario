@@ -1,5 +1,6 @@
-//! Update notice: once per launch, asks GitHub for the latest release's version and lets the title
-//! screen say when there's a newer one. Only reads that; nothing gets downloaded or replaced.
+//! Update notice: asks GitHub for the latest release's version at launch and every 5 minutes after,
+//! and lets the title screen (and a small note in game) say when there's a newer one. Only reads
+//! that; nothing gets downloaded or replaced.
 //! `update_check = off` in er_mario.ini skips it.
 
 use std::sync::Mutex;
@@ -21,18 +22,29 @@ pub fn start() {
         log("update check: off");
         return;
     }
-    std::thread::spawn(|| match latest_tag() {
-        Some(tag) => {
-            let latest = tag.trim_start_matches('v').to_string();
-            let current = env!("CARGO_PKG_VERSION");
-            if parse(&latest) > parse(current) {
-                log(format!("update check: {latest} is out (this is {current})"));
-                *LATEST.lock().unwrap_or_else(|e| e.into_inner()) = Some(latest);
-            } else {
-                log(format!("update check: up to date ({current})"));
+    std::thread::spawn(|| {
+        let mut first = true;
+        loop {
+            match latest_tag() {
+                Some(tag) => {
+                    let latest = tag.trim_start_matches('v').to_string();
+                    let current = env!("CARGO_PKG_VERSION");
+                    let mut known = LATEST.lock().unwrap_or_else(|e| e.into_inner());
+                    if parse(&latest) > parse(current) {
+                        if known.as_deref() != Some(latest.as_str()) {
+                            log(format!("update check: {latest} is out (this is {current})"));
+                            *known = Some(latest);
+                        }
+                    } else if first {
+                        log(format!("update check: up to date ({current})"));
+                    }
+                }
+                None if first => log("update check: GitHub not reachable"),
+                None => {}
             }
+            first = false;
+            std::thread::sleep(std::time::Duration::from_secs(5 * 60));
         }
-        None => log("update check: GitHub not reachable"),
     });
 }
 

@@ -23,7 +23,6 @@ mod moving;
 mod input_policy;
 mod addon_hitboxes;
 mod collision_geometry;
-mod movement_guard;
 mod throw_collision;
 mod names;
 mod paths;
@@ -1038,7 +1037,9 @@ fn input_task() {
     let menu = MENU_OPEN.load(Ordering::Relaxed);
     let (mut opener, mut pressed) = (false, false);
     let mut right_trigger = 0;
-    if let Some(p) = pad {
+    // alt-tabbed: the game ignores the pad but we still read it, which looked like a menu eating
+    // every press (Mario froze until the next press got through)
+    if let Some(p) = pad.filter(|_| kbd::focused()) {
         let g = p.Gamepad;
         let b = g.wButtons;
         let stick = (g.sThumbLX as i32).abs() > 12000 || (g.sThumbLY as i32).abs() > 12000;
@@ -2158,8 +2159,6 @@ fn frame(data: &FD4TaskData) {
             m.stuck_ticks = 0;
         }
         let stuck_at = m.state.position;
-        let guarded_target_pos = target_pos.clone();
-        let guarded_no_stomp = no_stomp.clone();
         let tt = std::time::Instant::now();
         let result = worker::call("tick", move |ctx| {
             if unstick {
@@ -2261,26 +2260,7 @@ fn frame(data: &FD4TaskData) {
         });
         PERF.lock().unwrap_or_else(|e| e.into_inner()).tick_ms += tt.elapsed().as_secs_f32() * 1000.0;
         match result {
-            Some((mut state, mesh, colors, normals, mut parts, mut hits)) => {
-                let caster = collision::Caster { filter: PLAYER_MOVE_FILTER, origin: m.origin, player: player_ref };
-                let accepted = movement_guard::constrain(
-                    m.state.position, state.position,
-                    FOLLOWING.load(Ordering::Relaxed) || game_driven(current_anim(&player_ref.chr_ins)),
-                    |start, delta| {
-                        // a removed body (a boss fog wall after the fight) still answers the ray
-                        caster.cast(start, delta).filter(|&h| {
-                            let e = collision::sm_to_er(caster.origin, h);
-                            !havok_col::on_removed_body(glam::Vec3::new(e.0, e.1, e.2))
-                        })
-                    },
-                );
-                if accepted != state.position {
-                    set_mario_position(m.id, accepted);
-                    state.position = accepted;
-                    hits = worker::call("guarded body hits", move |_| {
-                        if alive { combat::hits(id, &state, &guarded_target_pos, &guarded_no_stomp) } else { Vec::new() }
-                    }).unwrap_or_default();
-                }
+            Some((state, mesh, colors, normals, mut parts, mut hits)) => {
                 if alive && fludd_allowed {
                     let caster = collision::Caster { filter: m.filter, origin: m.origin, player: player_ref };
                     let water = ap_fludd::visual();
@@ -2475,6 +2455,14 @@ fn frame(data: &FD4TaskData) {
                 // the real collision again, with a floor under his feet for a moment (the area past
                 // a fog wall may still be loading in)
                 m.last_query = None;
+                // through a fog gate: he ends up inside its thickened wall, put him out on his side
+                let e = collision::sm_to_er(m.origin, m.state.position);
+                if let Some(out) = m.havok.out_of_thick_wall(glam::Vec3::new(e.0, e.1, e.2)) {
+                    let sm = collision::er_to_sm(m.origin, &HavokPosition(out.x, out.y, out.z, 0.0));
+                    log(format!("follow: Mario was inside a fog gate's wall, moved out to {sm:?}"));
+                    set_mario_position(m.id, sm);
+                    m.state.position = sm;
+                }
                 *FOLLOW_ENDED.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), m.state.position));
             }
         }
