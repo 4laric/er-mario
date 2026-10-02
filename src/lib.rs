@@ -2407,8 +2407,9 @@ fn frame(data: &FD4TaskData) {
         }
     }
 
-    // F2 (debug): every Site of Grace unlocked (their "lit" event flags from BonfireWarpParam),
-    // for testing around the world. Offline Mario save only.
+    // F2 (debug): every Site of Grace unlocked (their "lit" event flags from BonfireWarpParam)
+    // and the whole map revealed (WorldMapPieceParam), for testing around the world.
+    // Offline Mario save only.
     {
         static F2_WAS: AtomicBool = AtomicBool::new(false);
         let f2 = debug_key(0x71);
@@ -2425,6 +2426,17 @@ fn frame(data: &FD4TaskData) {
                     }
                 }
                 log(format!("graces: {n} unlocked"));
+                let mut pieces = 0;
+                for i in 0..1000 {
+                    let Some(row) = repo.get_row_by_index::<eldenring::cs::WorldMapPieceParam>(i) else { break };
+                    for flag in [row.open_event_flag_id(), row.acquisition_event_flag_id()] {
+                        if flag != 0 {
+                            flags.virtual_memory_flag.set_flag(flag, true);
+                        }
+                    }
+                    pieces += 1;
+                }
+                log(format!("map: {pieces} pieces revealed"));
             }
         } else if !f2 {
             F2_WAS.store(false, Ordering::Relaxed);
