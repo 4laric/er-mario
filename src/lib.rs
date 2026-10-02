@@ -173,9 +173,13 @@ fn xinput_filter(index: u32, state: *mut XINPUT_STATE, rc: u32) -> u32 {
             if selecting { g.wButtons &= !(XINPUT_GAMEPAD_DPAD_UP | XINPUT_GAMEPAD_DPAD_DOWN | XINPUT_GAMEPAD_DPAD_RIGHT | XINPUT_GAMEPAD_DPAD_LEFT); }
         }
         if ap_cappy::visual().enabled { g.bRightTrigger = 0; }
-        if ap_sonic::visual().enabled { g.wButtons &= !(XINPUT_GAMEPAD_LEFT_THUMB | XINPUT_GAMEPAD_RIGHT_THUMB); }
+        if ap_sonic::visual().enabled {
+            let dash = input_policy::air_dash_chord(true, g.wButtons.contains(XINPUT_GAMEPAD_LEFT_SHOULDER), g.wButtons.contains(XINPUT_GAMEPAD_RIGHT_THUMB));
+            g.wButtons &= !XINPUT_GAMEPAD_LEFT_THUMB;
+            if dash { g.wButtons &= !(XINPUT_GAMEPAD_RIGHT_THUMB | XINPUT_GAMEPAD_LEFT_SHOULDER); }
+        }
         // with the SM64 camera the right stick is Lakitu's C-buttons, not Elden Ring's camera
-        if lakitu::ON.load(Ordering::Relaxed) {
+        if input_policy::lakitu_owns_camera(lakitu::ON.load(Ordering::Relaxed), lakitu::TARGET_LOCKED.load(Ordering::Relaxed)) {
             g.sThumbRX = 0;
             g.sThumbRY = 0;
         }
@@ -1080,6 +1084,7 @@ fn input_task() {
     const ACTION: u64 = 1 << 4; // interact (doors, chests, graces, messages...)
     const USE_ITEM: u64 = 1 << 7;
     const CHANGE_ITEM: u64 = 1 << 11;
+    const LOCK_ON: u64 = 1 << 12;
     let allow_item = FLASK_ALLOWED.load(Ordering::Relaxed);
     // research (debug): which action bits a press makes, to find what NPC dialogue listens to
     if debug() {
@@ -1109,7 +1114,7 @@ fn input_task() {
         &mut req.queued_action_inputs,
         &mut req.cancel_ready_actions,
     ] {
-        *bits(a) &= ACTION | CHANGE_ITEM | if allow_item { USE_ITEM } else { 0 };
+        *bits(a) &= ACTION | CHANGE_ITEM | LOCK_ON | if allow_item { USE_ITEM } else { 0 };
     }
 }
 
@@ -1156,6 +1161,7 @@ impl Drop for DrawTimer {
 
 fn frame(data: &FD4TaskData) {
     FLASK_ALLOWED.store(false, Ordering::Relaxed);
+    lakitu::TARGET_LOCKED.store(false, Ordering::Relaxed);
     {
         let mut p = PERF.lock().unwrap_or_else(|e| e.into_inner());
         p.frames += 1;
@@ -1581,6 +1587,8 @@ fn frame(data: &FD4TaskData) {
     }
     // SM64's camera (F9 switches to Elden Ring's): Elden Ring's own for cutscenes, doors, deaths
     {
+        let locked = player_ref.chr_ins.is_locked_on;
+        lakitu::TARGET_LOCKED.store(locked, Ordering::Relaxed);
         static F9_WAS: AtomicBool = AtomicBool::new(false);
         let f9 = kbd::focused() && unsafe { GetAsyncKeyState(0x78) } as u16 & 0x8000 != 0;
         if f9 && !F9_WAS.swap(true, Ordering::Relaxed) {
@@ -1591,7 +1599,11 @@ fn frame(data: &FD4TaskData) {
             F9_WAS.store(false, Ordering::Relaxed);
         }
         let in_cutscene = cutscene_now(m.dead, player_ref);
-        if in_cutscene {
+        if locked {
+            // Native camera handles target framing and right-stick target switching.
+            // Reset the override so steering follows its live forward direction.
+            lakitu::reset();
+        } else if in_cutscene {
             // a cutscene: the game's own camera shows (no update, so the camera isn't written);
             // Lakitu carries on afterwards where he was
         } else if WORLD_PAUSED.load(Ordering::Relaxed) {
@@ -1890,7 +1902,7 @@ fn frame(data: &FD4TaskData) {
             inputs.stick_y = -axis(g.sThumbLY);
             cap_held = g.bRightTrigger > 100;
             spin_held = g.wButtons.contains(XINPUT_GAMEPAD_LEFT_THUMB);
-            air_dash = g.wButtons.contains(XINPUT_GAMEPAD_RIGHT_THUMB);
+            air_dash = input_policy::air_dash_chord(ap_sonic::visual().enabled, g.wButtons.contains(XINPUT_GAMEPAD_LEFT_SHOULDER), g.wButtons.contains(XINPUT_GAMEPAD_RIGHT_THUMB));
             fludd_held = g.wButtons.contains(XINPUT_GAMEPAD_RIGHT_SHOULDER);
             if fludd_held {
                 if g.wButtons.contains(XINPUT_GAMEPAD_DPAD_UP) { fludd_select = ap_fludd::HOVER; }
@@ -1901,7 +1913,7 @@ fn frame(data: &FD4TaskData) {
             inputs.button_a = g.wButtons.contains(XINPUT_GAMEPAD_A) as u8;
             // X is native item use; B remains Mario's punch/grab/throw.
             inputs.button_b = g.wButtons.contains(XINPUT_GAMEPAD_B) as u8;
-            inputs.button_z = (g.wButtons.contains(XINPUT_GAMEPAD_LEFT_SHOULDER) || g.bLeftTrigger > 100) as u8;
+            inputs.button_z = ((!air_dash && g.wButtons.contains(XINPUT_GAMEPAD_LEFT_SHOULDER)) || g.bLeftTrigger > 100) as u8;
         }
         // SM64's first-person view: Mario stands still, the stick looks around
         if lakitu::first_person() {

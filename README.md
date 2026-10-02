@@ -38,6 +38,14 @@ work through Steam Input, which Steam turns on for them by default.
 
 **Stay offline.** me3 starts the game offline with anti-cheat off. Never play this mod online.
 
+## Camera lock-on (experimental AP fork builds)
+
+Native target lock-on is available with **Right Stick Click** or **Q** (default
+Elden Ring bindings). While locked, Elden Ring's camera frames the target and the
+right stick switches targets. Unlocking returns to the selected free camera;
+**F9** still switches that choice between Lakitu and Elden Ring. Mario's movement
+and attacks keep their normal direction rather than automatically aiming at the target.
+
 ## Crimson Flasks (experimental AP fork builds)
 
 Crimson Flasks now heal Mario using the game's normal charges. Equip a Crimson Flask
@@ -99,7 +107,7 @@ Its swept hitbox damages each target once per throw. Enemy capture is not includ
 to charge Spin Dash, then release. Its spinning charge animation ramps from 1x to a
 maximum of 3x speed; Mario does not drift during charging. Hold it in the air to charge
 Drop Dash for the next landing. Press
-**Right Stick Click** or **P** to Air Dash once per airtime; landing on the ground
+**LB + Right Stick Click** or **P** to Air Dash once per airtime; landing on the ground
 restores it. Cap bounces and FLUDD do not restore the aerial moves. AP seeds unlock
 the three moves separately. Charge and dash use a spinning animation and SM64 sounds.
 Only actual dash movement damages targets, once per target per burst; charging does not.
