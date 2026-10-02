@@ -70,6 +70,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./addons_physics_tests.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          clang-cl /Ilibsm64/src /Ilibsm64/src/decomp/include /Ishim /DGBI_FLOATS /DVERSION_US tests/skate_physics.c libsm64/src/er_skate.c /Fe:skate_physics_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./skate_physics_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           rustc --edition=2024 --test src/collision_geometry.rs -o collision_geometry_tests.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./collision_geometry_tests.exe

@@ -165,6 +165,23 @@ to blank it out.
 
 ## Building
 
+### Experimental skating
+
+Set `skateboard = on` in `er_mario.ini`. **D-pad Left / V** mounts or dismounts
+while safely grounded; **RB + D-pad Left** still selects FLUDD Squirt.
+On the board, hold **A / L / right mouse** to push, use the **left stick / A-D**
+to carve, hold **B / comma / left mouse** to brake, and press **X / R** to ollie.
+The board carries momentum, accelerates downhill, and uses Mario's native ground
+and airborne collision steps. Landing retains speed. Hits, forced actions, menus
+and travel dismount; release the mount button before mounting again.
+FLUDD, Cappy, Sonic and flask input are suspended while riding. **R3 / Q** still
+locks on; dismount to use Mario's normal moves and drink a flask.
+
+This is an original Skate-inspired riding controller and procedural board, with
+no Skate 3 code or assets. It currently implements riding and ollies; manuals,
+flip tricks, rail grinding and Skate 3 physics parity are not implemented.
+Asset version 7 requires a one-time model rebuild and restart on update.
+
 Windows, with [Rust](https://rustup.rs), Visual Studio Build Tools (C++),
 [LLVM](https://github.com/llvm/llvm-project/releases) (clang-cl compiles libsm64's C code) and
 Python. Cargo fetches fromsoftware-rs itself (pinned to a commit in `Cargo.toml`):

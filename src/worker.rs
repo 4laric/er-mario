@@ -30,10 +30,12 @@ fn sender() -> &'static Mutex<Sender<Job>> {
             let mut ctx = Ctx { geo: Geometry::new() };
             while let Ok(job) = rx.recv() {
                 crate::ap_capabilities::apply();
+                crate::skate::apply();
                 job(&mut ctx);
                 crate::ap_fludd::publish();
                 crate::ap_cappy::publish();
                 crate::ap_sonic::publish();
+                crate::skate::publish();
             }
         });
         Mutex::new(tx)

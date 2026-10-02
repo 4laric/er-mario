@@ -27,6 +27,7 @@ mod throw_collision;
 mod names;
 mod paths;
 mod sm64;
+mod skate;
 mod ap_capabilities;
 mod ap_stats;
 pub(crate) mod ap_fludd;
@@ -172,6 +173,8 @@ fn xinput_filter(index: u32, state: *mut XINPUT_STATE, rc: u32) -> u32 {
             if selecting { g.wButtons &= !(XINPUT_GAMEPAD_DPAD_UP | XINPUT_GAMEPAD_DPAD_DOWN | XINPUT_GAMEPAD_DPAD_RIGHT | XINPUT_GAMEPAD_DPAD_LEFT); }
         }
         if ap_cappy::visual().enabled { g.bRightTrigger = 0; }
+        if skate::enabled() && !g.wButtons.contains(XINPUT_GAMEPAD_RIGHT_SHOULDER) { g.wButtons &= !XINPUT_GAMEPAD_DPAD_LEFT; }
+        if skate::visual().mounted { g.wButtons &= !XINPUT_GAMEPAD_X; }
         if ap_sonic::visual().enabled {
             g.wButtons &= !XINPUT_GAMEPAD_LEFT_THUMB;
             g.bLeftTrigger = 0;
@@ -1045,7 +1048,7 @@ fn input_task() {
         let stick = (g.sThumbLX as i32).abs() > 12000 || (g.sThumbLY as i32).abs() > 12000;
         pressed |= b.contains(XINPUT_GAMEPAD_A)
             || b.contains(XINPUT_GAMEPAD_B)
-            || b.contains(XINPUT_GAMEPAD_X)
+            || (b.contains(XINPUT_GAMEPAD_X) && (menu || !skate::visual().mounted))
             || b.contains(XINPUT_GAMEPAD_Y)
             || b.contains(XINPUT_GAMEPAD_LEFT_SHOULDER)
             || (g.bLeftTrigger > 100 && (menu || !ap_sonic::visual().enabled))
@@ -1057,7 +1060,7 @@ fn input_task() {
         let key = |vk: i32| unsafe { GetAsyncKeyState(vk) } as u16 & 0x8000 != 0;
         // Esc (menu), G (map); E interact, Space, F, R, Q, Enter, mouse buttons, and WASD in menus
         opener |= key(0x1B) || key(0x47);
-        pressed |= [0x45, 0x20, 0x46, 0x52, 0x51, 0x0D, 0x01, 0x02].into_iter().any(key)
+        pressed |= [0x45, 0x20, 0x46, 0x52, 0x51, 0x0D, 0x01, 0x02].into_iter().filter(|&vk| vk != 0x52 || menu || !skate::visual().mounted).any(key)
             || (menu && [0x57, 0x41, 0x53, 0x44].into_iter().any(key));
     }
     // the game's own "a menu is up" (pause menu, prompts): the most reliable signal, both ways
@@ -1396,7 +1399,7 @@ fn frame(data: &FD4TaskData) {
                 *PENDING_RESTORE.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), saved));
             }
             let id = m.id;
-            worker::call("delete", move |_| unsafe { sm64::sm64_mario_delete(id) });
+            worker::call("delete", move |_| { skate::suspend(); unsafe { sm64::sm64_mario_delete(id) }; });
             physics.gravity_disabled = false;
             set_opacity(1.0);
             *engine_mario::POSE.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -1689,7 +1692,7 @@ fn frame(data: &FD4TaskData) {
     hud::set(wedges.min(ap_stats::max_wedges() as u8), hide_why, true);
     let flask_ready = hide_why.is_none() && !FOLLOWING.load(Ordering::Relaxed) && !lakitu::first_person()
         && m.state.health >= 0x100 && m.state.action & ((1 << 11) | (1 << 12) | (1 << 13) | (1 << 14) | (1 << 17) | (1 << 20) | (1 << 21) | (1 << 23)) == 0
-        && !carry::holding() && !swing::holding();
+        && !carry::holding() && !swing::holding() && !skate::visual().mounted;
     FLASK_ALLOWED.store(flask_ready, Ordering::Relaxed);
     let request = FLASK_REQUEST_ANIM.swap(-1, Ordering::Relaxed);
     let sample = flask_ready.then(flask::snapshot).flatten();
@@ -1715,6 +1718,12 @@ fn frame(data: &FD4TaskData) {
         log(format!("flask: native Crimson charge consumed, Mario healing {heal} quarter-wedges"));
     }
     if !flask_ready { m.flask_heal = 0; }
+    {
+        static SUSPENDED: AtomicBool = AtomicBool::new(false);
+        let blocked = hide_why.is_some() || FOLLOWING.load(Ordering::Relaxed) || lakitu::first_person() || !kbd::focused();
+        if blocked && !SUSPENDED.swap(true, Ordering::Relaxed) && skate::enabled() { worker::call("skating suspended", |_| skate::suspend()); }
+        if !blocked { SUSPENDED.store(false, Ordering::Relaxed); }
+    }
     if (hide_why.is_some() || FOLLOWING.load(Ordering::Relaxed)) && (ap_fludd::visual().enabled || ap_cappy::visual().enabled || ap_sonic::visual().enabled) {
         m.addon_hits.reset();
         worker::call("addon movement suspended", |_| { unsafe { sm64::sm64_er_fludd_input(0, 0, 0, 0); sm64::sm64_er_addons_input(0, 0, 0, 0); }; ap_fludd::publish(); });
@@ -1829,7 +1838,7 @@ fn frame(data: &FD4TaskData) {
         ap_capabilities::set_live_instance(false);
         m.dead = true;
         let id = m.id;
-        worker::call("kill", move |_| unsafe { sm64::sm64_mario_kill(id) });
+        worker::call("kill", move |_| { skate::suspend(); unsafe { sm64::sm64_mario_kill(id) }; });
         log("the Tarnished died: Mario dies");
         stats::update(|s| s.deaths += 1);
         coins::clear();
@@ -1840,7 +1849,7 @@ fn frame(data: &FD4TaskData) {
         log("respawned: recreating Mario");
         m.moving.clear(&mut m.havok);
         let id = m.id;
-        worker::call("delete", move |_| unsafe { sm64::sm64_mario_delete(id) });
+        worker::call("delete", move |_| { skate::suspend(); unsafe { sm64::sm64_mario_delete(id) }; });
         *guard = None;
         return;
     }
@@ -1902,6 +1911,8 @@ fn frame(data: &FD4TaskData) {
         m.acc -= 1.0 / 30.0;
         SM64_TICKS.fetch_add(1, Ordering::Relaxed);
         let (mut cap_held, mut spin_held, mut air_dash) = (false, false, false);
+        let riding = skate::visual().mounted;
+        let (mut skate_toggle, mut skate_push, mut skate_brake, mut skate_ollie, mut skate_steer) = (false, false, false, false, 0.0f32);
         let mut fludd_held = false;
         let mut fludd_select = 0u32;
         let mut fludd_cycle = false;
@@ -1914,6 +1925,11 @@ fn frame(data: &FD4TaskData) {
             };
             inputs.stick_x = axis(g.sThumbLX);
             inputs.stick_y = -axis(g.sThumbLY);
+            skate_toggle = skate::enabled() && g.wButtons.contains(XINPUT_GAMEPAD_DPAD_LEFT) && !g.wButtons.contains(XINPUT_GAMEPAD_RIGHT_SHOULDER);
+            skate_push = g.wButtons.contains(XINPUT_GAMEPAD_A);
+            skate_brake = g.wButtons.contains(XINPUT_GAMEPAD_B);
+            skate_ollie = g.wButtons.contains(XINPUT_GAMEPAD_X);
+            skate_steer = -axis(g.sThumbLX);
             cap_held = g.bRightTrigger > 100;
             spin_held = g.wButtons.contains(XINPUT_GAMEPAD_LEFT_THUMB);
             air_dash = input_policy::air_dash_trigger(ap_sonic::visual().enabled, g.bLeftTrigger);
@@ -1943,6 +1959,11 @@ fn frame(data: &FD4TaskData) {
                 inputs.stick_y = k.stick_y;
             }
             if !menu_walk {
+                skate_toggle |= skate::enabled() && k.skate_toggle;
+                skate_push |= k.a;
+                skate_brake |= k.b;
+                skate_ollie |= k.skate_ollie;
+                if skate_steer == 0.0 { skate_steer = -k.stick_x; }
                 inputs.button_a |= k.a as u8;
                 inputs.button_b |= k.b as u8;
                 inputs.button_z |= k.z as u8;
@@ -1972,6 +1993,10 @@ fn frame(data: &FD4TaskData) {
         let flask_pose = m.flask.pose();
         if flask_pose.is_some() {
             inputs = sm64::SM64MarioInputs { cam_look_x: inputs.cam_look_x, cam_look_z: inputs.cam_look_z, ..Default::default() };
+            fludd_held = false; cap_held = false; spin_held = false; air_dash = false;
+        }
+        if riding || skate_toggle {
+            inputs.button_a = 0; inputs.button_b = 0; inputs.button_z = 0;
             fludd_held = false; cap_held = false; spin_held = false; air_dash = false;
         }
         m.ticks += 1;
@@ -2118,6 +2143,8 @@ fn frame(data: &FD4TaskData) {
         let action_before = m.state.action;
         let alive = !m.dead;
         let fludd_allowed = alive && flask_pose.is_none() && kbd::focused() && !MENU_OPEN.load(Ordering::Relaxed) && !FOLLOWING.load(Ordering::Relaxed) && !lakitu::first_person();
+        let skate_allowed = fludd_allowed && !carry::holding() && !swing::holding();
+        let addons_allowed = fludd_allowed && !riding && !skate_toggle;
         let hurt_from = targets
             .iter()
             .min_by(|a, b| {
@@ -2227,8 +2254,9 @@ fn frame(data: &FD4TaskData) {
                 unsafe { sm64::sm64_play_sound_global(SOUND_HEART) };
             }
             unsafe {
-                sm64::sm64_er_addons_input(fludd_allowed as u32, cap_held as u32, spin_held as u32, air_dash as u32);
-                sm64::sm64_er_fludd_input(fludd_allowed as u32, fludd_held as u32, fludd_select, fludd_cycle as u32);
+                sm64::sm64_er_skate_input(skate_allowed as u32, skate_toggle as u32, skate_push as u32, skate_brake as u32, skate_ollie as u32, skate_steer);
+                sm64::sm64_er_addons_input(addons_allowed as u32, cap_held as u32, spin_held as u32, air_dash as u32);
+                sm64::sm64_er_fludd_input(addons_allowed as u32, fludd_held as u32, fludd_select, fludd_cycle as u32);
                 if rested { sm64::sm64_er_fludd_refill(); }
             }
             let mut state = sm64::SM64MarioState::default();
@@ -2239,6 +2267,7 @@ fn frame(data: &FD4TaskData) {
             ap_fludd::publish();
             ap_cappy::publish();
             ap_sonic::publish();
+            skate::publish();
             // SM64's sound engine runs at the same 30 Hz as Mario
             let mut buf = [0i16; 544 * 2 * 2];
             let frames = unsafe { sm64::sm64_audio_tick(audio::queued(), 1100, buf.as_mut_ptr()) } as usize;
@@ -2255,6 +2284,8 @@ fn frame(data: &FD4TaskData) {
             let eye_cell = eye_cell(&ctx.geo.uv, ctx.geo.used());
             let mut parts = engine_mario::relative_parts(&mats, count, state.position, eye_cell, peace);
             if let (Some(parts), Some(progress)) = (parts.as_mut(), flask_pose) { engine_mario::flask_pose(parts, progress); }
+            let board = skate::visual();
+            if let Some(parts) = parts.as_mut().filter(|_| board.mounted) { engine_mario::skate_pose(parts, board.speed, board.airborne, board.lean); }
             let hits = if alive { combat::hits(id, &state, &target_pos, &no_stomp) } else { Vec::new() };
             (state, ctx.geo.position[..n].to_vec(), ctx.geo.color[..n].to_vec(), ctx.geo.normal[..n].to_vec(), parts, hits)
         });

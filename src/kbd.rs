@@ -31,6 +31,8 @@ fn hidden(k: u32) -> bool {
         (crate::ap_fludd::visual().enabled && (k == 0x24 || k == 0x17))
         || (crate::ap_cappy::visual().enabled && k == 0x18)
         || (crate::ap_sonic::visual().enabled && (k == 0x16 || k == 0x19))))
+        || (!crate::MENU_OPEN.load(Ordering::Relaxed) && crate::skate::enabled() && k == 0x2F)
+        || (!crate::MENU_OPEN.load(Ordering::Relaxed) && crate::skate::visual().mounted && k == 0x13)
 }
 
 const VK_W: i32 = 0x57;
@@ -56,6 +58,8 @@ pub fn focused() -> bool {
 }
 
 pub struct Keys {
+    pub skate_toggle: bool,
+    pub skate_ollie: bool,
     pub cappy: bool,
     pub spin: bool,
     pub dash: bool,
@@ -78,6 +82,8 @@ pub fn read() -> Option<Keys> {
     // full tilt diagonally too, like a stick pushed into the corner
     let len = (x * x + y * y).sqrt().max(1.0);
     Some(Keys {
+        skate_toggle: down(0x56),
+        skate_ollie: down(0x52),
         stick_x: x / len,
         stick_y: y / len,
         a: down(VK_L) || down(VK_RBUTTON),
@@ -159,7 +165,7 @@ pub unsafe fn install_hooks() {
                 for &k in &HIDDEN {
                     unsafe { *data.add(k as usize) = 0 };
                 }
-                for k in [0x24u32, 0x17, 0x18, 0x16, 0x19] {
+                for k in [0x24u32, 0x17, 0x18, 0x16, 0x19, 0x2F, 0x13] {
                     if hidden(k) { unsafe { *data.add(k as usize) = 0 }; }
                 }
             }

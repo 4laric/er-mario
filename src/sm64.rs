@@ -136,6 +136,12 @@ impl Drop for GeometryGuard<'_> {
 unsafe extern "C" {
     pub fn sm64_er_ap_set_capabilities(managed: u32, unlocked: u32);
     pub fn sm64_er_cappy_configure(enabled: u32, mask: u32);
+    // Worker-confined original skating mode. State: enabled,mounted,air,trick,bail;
+    // motion: speed in SM64 units/tick, signed steering lean.
+    pub fn sm64_er_skate_configure(enabled: u32);
+    pub fn sm64_er_skate_reset();
+    pub fn sm64_er_skate_input(allowed: u32, toggle: u32, push: u32, brake: u32, ollie: u32, steer: f32);
+    pub fn sm64_er_skate_get_state(out: *mut u32, motion: *mut f32);
     pub fn sm64_er_sonic_configure(enabled: u32, mask: u32);
     pub fn sm64_er_addons_input(allowed: u32, cap_held: u32, spin_held: u32, dash: u32);
     pub fn sm64_er_cappy_get_state(out: *mut u32, visual: *mut f32);

@@ -31,6 +31,10 @@ jobs:
         run: |
           $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
           $env:CC_x86_64_pc_windows_msvc = 'clang-cl'
+          clang-cl /Ilibsm64/src /Ilibsm64/src/decomp/include /Ishim /DGBI_FLOATS /DVERSION_US tests/skate_physics.c libsm64/src/er_skate.c /Fe:skate_physics_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./skate_physics_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           rustc --edition=2024 --test src/collision_geometry.rs -o collision_geometry_tests.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./collision_geometry_tests.exe

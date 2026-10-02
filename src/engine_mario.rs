@@ -13,7 +13,7 @@ use crate::{explore, log};
 const PART_BONES: [&str; PARTS] = crate::assets::flver::PART_BONES;
 /// SM64's body parts (0..16) plus the eye variants (16..20).
 pub const SM64_PARTS: usize = 16;
-pub const PARTS: usize = 31;
+pub const PARTS: usize = 32;
 /// SM64's right hand part, and our peace-sign copy of it
 const RIGHT_HAND: usize = 9;
 const PEACE: usize = 20;
@@ -112,7 +112,69 @@ pub fn relative_parts(mats: &[f32], count: i32, mario: [f32; 3], eye_cell: u8, p
     out[crate::assets::cappy::CAP] = PartPose { scale: if flying_cap { cap.scale } else { 0.001 }, ..cap };
     out[crate::assets::cappy::BARE_HEAD] = PartPose { scale: if bare { head.scale } else { 0.001 }, ..head };
     out[crate::assets::addons::FLASK] = PartPose { scale: 0.001, ..out[RIGHT_HAND] };
+    out[crate::assets::addons::BOARD] = PartPose { scale: 0.001, ..out[2] };
     Some(out)
+}
+
+/// Original skating stance, with both feet on the separate deck and arms balancing.
+/// Native mechanics own movement/actions; this changes only the rendered pose.
+pub fn skate_pose(parts: &mut [PartPose; PARTS], speed: f32, airborne: bool, lean: f32) {
+    let torso = parts[2];
+    let mut up = (torso.rot * -Vec3::X).normalize_or_zero();
+    if up.length_squared() < 0.5 { up = Vec3::Y; }
+    let forward = (torso.rot * Vec3::Y).normalize_or_zero();
+    let across = forward.cross(up).normalize_or_zero();
+    let axes = Mat3::from_cols(-up, forward, across);
+    let rot = Quat::from_mat3(&axes).normalize();
+    let feet = (parts[12].pos + parts[15].pos) * 0.5;
+    let board = PartPose { rot, pos: feet - up * 0.035, scale: 1.0 };
+    parts[crate::assets::addons::BOARD] = board;
+    let crouch = if airborne { 0.08 } else { 0.035 + speed.abs().min(100.0) * 0.00045 };
+    // Native animation supplies a neutral skating body; lower the upper body into a stance.
+    for part in [1,2,3,4,5,6,7,8,9,16,17,18,19,20,21,22,23,24,25,26,27] {
+        parts[part].pos -= up * crouch;
+    }
+    // Keep cap/bare-head poses attached; an airborne Cappy projectile is independent.
+    if parts[crate::assets::cappy::BARE_HEAD].scale < 0.01 {
+        parts[crate::assets::cappy::CAP].pos -= up * crouch;
+    }
+    parts[crate::assets::cappy::BARE_HEAD].pos -= up * crouch;
+    for (thigh, shin, shoe, sign) in [(10,11,12,-1.0),(13,14,15,1.0)] {
+        let hip = parts[thigh].pos;
+        let knee = feet + forward * (sign * 0.14 + 0.055) + across * (sign * 0.04) + up * 0.16;
+        let foot = feet + forward * (sign * 0.14) + across * (sign * 0.04);
+        let orient = |from: Vec3, to: Vec3| if from.length_squared()>1e-8 && to.length_squared()>1e-8 {
+            Quat::from_rotation_arc(from.normalize(),to.normalize())
+        } else { Quat::IDENTITY };
+        parts[thigh].rot = orient(parts[shin].pos-hip,knee-hip) * parts[thigh].rot;
+        parts[shin].rot = orient(parts[shoe].pos-parts[shin].pos,foot-knee) * parts[shin].rot;
+        parts[shin].pos = knee;
+        parts[shoe].pos = foot;
+        parts[shoe].rot = Quat::from_axis_angle(up, sign * 0.85) * parts[shoe].rot;
+    }
+    for (upper, lower, hand, sign) in [(4,5,6,-1.0),(7,8,9,1.0)] {
+        let shoulder = parts[upper].pos;
+        let elbow = shoulder + across * (sign * 0.14) + forward * 0.02 - up * 0.03;
+        let wrist = elbow + across * (sign * 0.12) + forward * 0.08;
+        let orient = |from: Vec3, to: Vec3| if from.length_squared()>1e-8 && to.length_squared()>1e-8 {
+            Quat::from_rotation_arc(from.normalize(),to.normalize())
+        } else { Quat::IDENTITY };
+        parts[upper].rot = orient(parts[lower].pos-shoulder,elbow-shoulder) * parts[upper].rot;
+        parts[lower].rot = orient(parts[hand].pos-parts[lower].pos,wrist-elbow) * parts[lower].rot;
+        parts[lower].pos = elbow;
+        parts[hand].pos = wrist;
+    }
+    parts[PEACE].scale = 0.001;
+    // Carve around the deck's forward axis; keep the native head, eyes and attachments together.
+    // A flying cap remains on its own projectile path, and the hidden flask stays independent.
+    let lean = if lean.is_finite() { lean.clamp(-1.0, 1.0) } else { 0.0 };
+    let carve = Quat::from_axis_angle(forward, lean * 0.22);
+    let cap_flying = parts[crate::assets::cappy::BARE_HEAD].scale >= 0.01;
+    for (i, part) in parts.iter_mut().enumerate().skip(1) {
+        if i == crate::assets::addons::FLASK || (i == crate::assets::cappy::CAP && cap_flying) { continue; }
+        part.pos = board.pos + carve * (part.pos - board.pos);
+        part.rot = carve * part.rot;
+    }
 }
 
 /// Presentation only: raise the native right arm, sip, then lower it during a flask drink.
@@ -167,6 +229,34 @@ fn squirt_stream_pose(torso: PartPose) -> PartPose {
     let scale = torso.scale * crate::assets::fludd::SQUIRT_STREAM_SCALE;
     let mouth = Vec3::from_array(crate::assets::fludd::STREAM_MOUTH);
     PartPose { rot, scale, pos: torso.pos + rot * mouth * (torso.scale - scale) }
+}
+
+#[cfg(test)]
+mod skate_tests {
+    use super::*;
+    #[test]
+    fn stance_plants_both_feet_on_the_deck_and_keeps_flask_independent() {
+        let rot = Quat::from_mat3(&Mat3::from_cols(-Vec3::Y, Vec3::Z, -Vec3::X));
+        for (airborne, lean) in [(false,0.0),(false,-1.0),(true,1.0),(true,f32::NAN),(false,20.0)] {
+            let mut parts = [PartPose {rot, pos:Vec3::new(0.0,0.5,0.0),scale:1.0}; PARTS];
+            parts[12].pos = Vec3::new(-0.1,0.12,0.0);
+            parts[15].pos = Vec3::new(0.1,0.12,0.0);
+            parts[crate::assets::addons::FLASK].scale = 0.001;
+            parts[crate::assets::cappy::BARE_HEAD].scale = 0.001;
+            let flask = parts[crate::assets::addons::FLASK];
+            skate_pose(&mut parts,80.0,airborne,lean);
+            let board = parts[crate::assets::addons::BOARD];
+            assert_eq!(board.scale,1.0);
+            for shoe in [12,15] {
+                let local = board.rot.inverse() * (parts[shoe].pos - board.pos);
+                assert!((local.x + 0.035).abs()<1e-5);
+                assert!(local.y.abs()<0.32 && local.z.abs()<0.13);
+            }
+            assert_eq!(parts[crate::assets::addons::FLASK].pos,flask.pos);
+            assert_eq!(parts[crate::assets::addons::FLASK].scale,flask.scale);
+            assert!(parts.iter().all(|p| p.pos.is_finite() && p.rot.is_finite()));
+        }
+    }
 }
 
 #[cfg(test)]

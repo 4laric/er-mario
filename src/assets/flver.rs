@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use super::model::{MarioModel, Tri};
 
 /// SM64 part -> FLVER bone (bones the chest piece skins natively); same list as engine_mario.rs.
-pub const PART_BONES: [&str; 31] = [
+pub const PART_BONES: [&str; 32] = [
     "",
     "Pelvis_Mantle",
     "Spine2",
@@ -45,6 +45,8 @@ pub const PART_BONES: [&str; 31] = [
     "L_Hand",
     // Small flask: verified unused leaf skin bone.
     "L_Calf",
+    // Board uses a separate verified leaf so drinking never reveals it.
+    "R_Calf",
 ];
 /// SM64 units -> metres, times Mario's 0.25 model scale
 const UNIT: f64 = 0.01 * 0.25;

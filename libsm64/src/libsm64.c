@@ -7,6 +7,7 @@
 #include "ap_stats.h"
 #include "er_fludd.h"
 #include "er_addons.h"
+#include "er_skate.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,6 +58,16 @@ struct MarioInstance
 struct ObjPool s_mario_instance_pool = { 0, 0 };
 
 /* Internal worker-only FLUDD entry points, intentionally not DLL exports. */
+void sm64_er_skate_configure(uint32_t enabled) { er_skate_configure(enabled); }
+void sm64_er_skate_reset(void) { er_skate_reset(); }
+void sm64_er_skate_input(uint32_t allowed, uint32_t toggle, uint32_t push, uint32_t brake, uint32_t ollie, float steer) {
+    er_skate_input(allowed, toggle, push, brake, ollie, steer);
+}
+void sm64_er_skate_get_state(uint32_t *out, float *motion) {
+    out[0]=er_skate.enabled; out[1]=er_skate.mounted; out[2]=er_skate.airborne;
+    out[3]=er_skate.trick; out[4]=er_skate.bail_ticks;
+    motion[0]=er_skate.speed; motion[1]=er_skate.lean;
+}
 void sm64_er_cappy_configure(uint32_t enabled, uint32_t mask) { er_cappy_configure(enabled, mask); }
 void sm64_er_sonic_configure(uint32_t enabled, uint32_t mask) { er_sonic_configure(enabled, mask); }
 void sm64_er_addons_input(uint32_t allowed, uint32_t cap_held, uint32_t spin_held, uint32_t dash) { er_addons_input(allowed, cap_held, spin_held, dash); }
@@ -215,6 +226,7 @@ SM64_LIB_FN int32_t sm64_mario_create( float x, float y, float z )
 {
     er_fludd_reset();
     er_addons_reset();
+    er_skate_reset();
     int32_t marioIndex = obj_pool_alloc_index( &s_mario_instance_pool, sizeof( struct MarioInstance ));
     struct MarioInstance *newInstance = s_mario_instance_pool.objects[marioIndex];
 
@@ -325,6 +337,7 @@ SM64_LIB_FN void sm64_mario_tick( int32_t marioId, const struct SM64MarioInputs 
 
 SM64_LIB_FN void sm64_mario_delete( int32_t marioId )
 {
+    er_skate_reset();
     er_fludd_input(0, 0, 0, 0);
     er_addons_input(0, 0, 0, 0);
     if( marioId >= s_mario_instance_pool.size || s_mario_instance_pool.objects[marioId] == NULL )

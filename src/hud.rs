@@ -501,7 +501,16 @@ impl ImguiRenderLoop for Overlay {
         }
 
         let fludd = crate::ap_fludd::visual();
-        if fludd.enabled {
+        let board = crate::skate::visual();
+        if board.enabled {
+            let label = if board.mounted {
+                format!("Skate {:.1} m/s  A push  B brake  X ollie  D-left dismount", board.speed * 0.30)
+            } else if board.bail_ticks > 0 {
+                "Skate: recover before remounting".into()
+            } else { "Skate: D-pad Left / V to mount".into() };
+            dl.add_text([size[0] * 0.5 + 50.0 * px, size[1] - 110.0 * px], [0.9, 0.85, 0.35, 1.0], label);
+        }
+        if fludd.enabled && !board.mounted {
             let name = match fludd.selected_nozzle { 1 => "Hover", 2 => "Rocket", 4 => "Turbo", 8 => "Squirt", _ => "Locked" };
             dl.add_text([size[0] * 0.5 + 50.0 * px, size[1] - 65.0 * px], [0.3, 0.85, 1.0, 1.0],
                 format!("FLUDD {name} {}/{}  RB / J", fludd.water_units, fludd.capacity_units));
@@ -509,7 +518,7 @@ impl ImguiRenderLoop for Overlay {
 
         let flask = FLASK.load(Ordering::Relaxed);
         let flask_max = flask >> 8;
-        if flask_max > 0 {
+        if flask_max > 0 && !board.mounted {
             // Share the addon column, with a separate row beneath FLUDD when it is enabled.
             let y = size[1] - 65.0 * px + if fludd.enabled { (10.0 * px).max(20.0) } else { 0.0 };
             dl.add_text([size[0] * 0.5 + 50.0 * px, y], [1.0, 0.45, 0.4, 1.0],
