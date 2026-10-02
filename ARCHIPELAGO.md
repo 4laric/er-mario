@@ -105,3 +105,30 @@ both report success while the last installed DLL bypasses the other's overlay.
 The Mario guard uses a 30-second bounded wait and releases its ownership and
 handle on exit. The client must use the same guard. See the independently
 linked [native regression](tests/hudhook_chain/README.md).
+
+## Optional health and power extension
+
+Base ABI v1 and the 16-byte capability state remain unchanged. Base state flag
+16 advertises stats support, including before Mario is initialized. The additional
+exports are `er_mario_ap_set_stats(max_wedges: u32, power_basis_points: u32) -> u32`
+and `er_mario_ap_get_stats_state(out: *mut StatState) -> u32`. `StatState` is four
+u32 fields: `abi_version` (1), `flags`, `max_wedges`, and `power_basis_points`.
+Flags 1/2/4 mean live ready, Mario enabled, and the requested stats snapshot
+actually applied. Null output and invalid setter arguments return 0; success is 1.
+
+Capacity accepts 4 through 8 wedges, power accepts 7500/10000/12500/15000 basis
+points. Defaults and reset are 8/10000. The setter only queues an atomic snapshot;
+the SM64 worker applies it before jobs and ticks. Clients must wait for both the
+capability and stats acknowledgments when changing both. Health capacity clamps
+current health without healing or resurrecting Mario when
+capacity increases. Initialization and explicit healing respect the applied
+maximum. Pending native healing retains its ability to offset damage at full
+health; only actual health is bounded by capacity. All attack shares and enemy/boss throw impacts use the applied power
+multiplier, preserving finisher and minimum damage rules. The meter treats the
+applied capacity as full and displays current/max below eight wedges.
+
+`tests/ap_bridge.rs` exercises the stats ABI, queued/applied state, all stat
+combinations, damage policy and meter ratio. `tests/ap_stats.c` runs the production
+health policy across every capacity and health value, including death, drowning,
+healing, draining and capacity reset. Windows CI runs these before the full DLL
+compile. New stats behavior still requires live gameplay validation.

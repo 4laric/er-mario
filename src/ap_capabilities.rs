@@ -44,6 +44,7 @@ pub fn apply() {
     let state = REQUESTED.load(Ordering::Acquire);
     unsafe { crate::sm64::sm64_er_ap_set_capabilities((state >> 32) as u32, state as u32) };
     APPLIED.store(state, Ordering::Release);
+    crate::ap_stats::apply();
 }
 
 #[unsafe(no_mangle)]
@@ -79,7 +80,9 @@ pub unsafe extern "C" fn er_mario_ap_get_state(out: *mut State) -> u32 {
             flags: u32::from(ready)
                 | (u32::from(enabled) << 1)
                 | (u32::from(applied) << 2)
-                | SUPPORTS_REGRESSION_INTERACT,
+                | SUPPORTS_REGRESSION_INTERACT
+                | crate::ap_stats::SUPPORTS_STATS,
+            // Stats feature support does not depend on current liveness.
             managed: (state >> 32) as u32,
             unlocked: state as u32,
         });

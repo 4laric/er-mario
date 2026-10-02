@@ -47,6 +47,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./ap_actions_tests.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          clang-cl /Ilibsm64/src /Ilibsm64/src/decomp/include /Ishim /DGBI_FLOATS /DVERSION_US tests/ap_stats.c libsm64/src/ap_stats.c /Fe:ap_stats_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./ap_stats_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --locked --release

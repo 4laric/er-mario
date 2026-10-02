@@ -280,6 +280,7 @@ pub struct Overlay {
 struct Meter {
     /// wedges last frame
     wedges: u8,
+    capacity: u32,
     /// when Mario last lost health (the meter came down then)
     hit: Instant,
     /// when he got back to full health (it slides out then), and its height at that moment
@@ -514,16 +515,18 @@ impl ImguiRenderLoop for Overlay {
             HEIGHT + (HEIGHT_TOP - HEIGHT) * ease((now.duration_since(hit).as_secs_f32() - METER_RISE_AFTER) / METER_RISE_TIME)
         };
         let long_ago = now.checked_sub(std::time::Duration::from_secs(60)).unwrap_or(now);
-        let m = self.meter.get_or_insert(Meter { wedges, hit: long_ago, full: (wedges >= 8).then_some((long_ago, HEIGHT_GONE)) });
+        let capacity = crate::ap_stats::max_wedges();
+        let m = self.meter.get_or_insert(Meter { wedges, capacity, hit: long_ago, full: (u32::from(wedges) >= capacity).then_some((long_ago, HEIGHT_GONE)) });
         if wedges < m.wedges {
             m.hit = now;
         }
-        if wedges >= 8 && m.wedges < 8 {
+        if u32::from(wedges) >= capacity && u32::from(m.wedges) < m.capacity {
             m.full = Some((now, hurt_height(m.hit)));
-        } else if wedges < 8 {
+        } else if u32::from(wedges) < capacity {
             m.full = None;
         }
         m.wedges = wedges;
+        m.capacity = capacity;
         let meter_height = match m.full {
             None => Some(hurt_height(m.hit)),
             Some((t, h0)) => {
@@ -566,8 +569,9 @@ impl ImguiRenderLoop for Overlay {
         if let Some(height) = meter_height {
             let (cx, cy) = (size[0] * 0.5, size[1] * (1.0 - height / 240.0));
             image(IMG_BASE, cx - 32.0 * px, cy - 32.0 * px, 64.0 * px, 64.0 * px);
+            if capacity < 8 { dl.add_text([cx - 12.0 * px, cy + 30.0 * px], [1.0, 1.0, 1.0, 1.0], format!("{wedges}/{capacity}")); }
             if wedges > 0 {
-                image(IMG_PIES + (wedges.min(8) - 1) as usize, cx - 16.0 * px, cy - 16.0 * px, 32.0 * px, 32.0 * px);
+                image(IMG_PIES + (crate::ap_stats::hud_pie(wedges, capacity) - 1) as usize, cx - 16.0 * px, cy - 16.0 * px, 32.0 * px, 32.0 * px);
             }
         }
     }
