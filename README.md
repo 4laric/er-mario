@@ -131,17 +131,18 @@ to blank it out.
   and saves keep working.
 - The `libsm64` folder is libsm64 with a few patches for the mod (ladder climbing, carrying,
   dive grabs, head turning, model part export), compiled into the DLL.
+- Once per launch the mod asks GitHub for the latest release's version, and the title screen says
+  when there's a newer one. Nothing is downloaded or installed automatically. `update_check = off`
+  in er_mario.ini turns the check off.
 
 ## Building
 
 Windows, with [Rust](https://rustup.rs), Visual Studio Build Tools (C++),
 [LLVM](https://github.com/llvm/llvm-project/releases) (clang-cl compiles libsm64's C code) and
-Python. fromsoftware-rs sits next to this repository:
+Python. Cargo fetches fromsoftware-rs itself (pinned to a commit in `Cargo.toml`):
 
 ```
 git clone https://github.com/deltarooo/er-mario
-git clone https://github.com/vswarte/fromsoftware-rs
-git -C fromsoftware-rs checkout 59fbd3b
 cd er-mario/libsm64
 python import-mario-geo.py
 cd ..

@@ -17,11 +17,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: er-mario
-      - uses: actions/checkout@v4
-        with:
-          repository: vswarte/fromsoftware-rs
-          ref: 59fbd3b3b7daaf14aca47c9f73530493dba6bc79
-          path: fromsoftware-rs
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

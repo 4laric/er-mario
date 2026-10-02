@@ -304,13 +304,14 @@ checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
 [[package]]
 name = "eldenring"
 version = "0.14.0"
+source = "git+https://github.com/vswarte/fromsoftware-rs?rev=59fbd3b3b7daaf14aca47c9f73530493dba6bc79#59fbd3b3b7daaf14aca47c9f73530493dba6bc79"
 dependencies = [
  "bitfield",
  "bitflags 2.13.2",
  "encoding_rs",
  "fromsoftware-shared",
  "fromsoftware-shared-stl",
- "glam 0.33.11",
+ "glam",
  "num_enum",
  "pelite",
  "thiserror",
@@ -340,7 +341,7 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "er-mario"
-version = "0.3.3"
+version = "0.3.5"
 dependencies = [
  "aes",
  "base64",
@@ -348,7 +349,7 @@ dependencies = [
  "cpal",
  "eldenring",
  "fromsoftware-shared",
- "glam 0.30.10",
+ "glam",
  "hudhook",
  "ilhook",
  "num-bigint",
@@ -379,11 +380,12 @@ dependencies = [
 [[package]]
 name = "fromsoftware-shared"
 version = "0.14.0"
+source = "git+https://github.com/vswarte/fromsoftware-rs?rev=59fbd3b3b7daaf14aca47c9f73530493dba6bc79#59fbd3b3b7daaf14aca47c9f73530493dba6bc79"
 dependencies = [
  "bitflags 2.13.2",
  "from-singleton",
  "fromsoftware-shared-macros",
- "glam 0.33.11",
+ "glam",
  "pelite",
  "thiserror",
  "undname",
@@ -394,6 +396,7 @@ dependencies = [
 [[package]]
 name = "fromsoftware-shared-macros"
 version = "0.14.0"
+source = "git+https://github.com/vswarte/fromsoftware-rs?rev=59fbd3b3b7daaf14aca47c9f73530493dba6bc79#59fbd3b3b7daaf14aca47c9f73530493dba6bc79"
 dependencies = [
  "inflections",
  "proc-macro2",
@@ -404,6 +407,7 @@ dependencies = [
 [[package]]
 name = "fromsoftware-shared-stl"
 version = "0.14.0"
+source = "git+https://github.com/vswarte/fromsoftware-rs?rev=59fbd3b3b7daaf14aca47c9f73530493dba6bc79#59fbd3b3b7daaf14aca47c9f73530493dba6bc79"
 
 [[package]]
 name = "futures-core"
@@ -475,12 +479,6 @@ name = "glam"
 version = "0.30.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19fc433e8437a212d1b6f1e68c7824af3aed907da60afa994e7f542d18d12aa9"
-
-[[package]]
-name = "glam"
-version = "0.33.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35b4e837a1d133645d1dcf283e146a4b9901e390a1c13545f959cfed3a72f24f"
 
 [[package]]
 name = "glob"

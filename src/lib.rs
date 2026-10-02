@@ -36,6 +36,7 @@ mod goldmask_policy;
 mod hud_install_lock;
 mod swing;
 mod stats;
+mod update;
 mod version;
 mod voice;
 mod worker;
@@ -574,6 +575,7 @@ fn init_sm64(export: bool) -> Option<Option<assets::model::MarioModel>> {
 fn startup() {
     let build = assets::check();
     log(format!("mod folder {}", paths::mod_dir().display()));
+    update::start();
     if build {
         hud::setup_progress("Setting up ER Mario", 0.0, "Reading the ROM");
     }
@@ -800,12 +802,27 @@ fn havok_surfaces(h: &mut havok_col::HavokCollision, origin: [f32; 3], mario: [f
         let v = t.map(|p| {
             collision::er_to_sm(origin, &HavokPosition(p.x, p.y, p.z, 0.0)).map(|x| x.round() as i32)
         });
-        let Some(v) = collision_geometry::surface_vertices(v, mid) else { continue };
+        let Some(v) = collision_geometry::surface_vertices(v, mid, Some(mario)) else { continue };
         let mut surf = sm64::SM64Surface::grass(v);
         surf.force = *layer as i16;
         out.push(surf);
     }
     Some(out)
+}
+
+/// Which eye texture SM64 is drawing (cells 5 open, 6 half, 7 closed, 8 dead): the median
+/// texture cell of this frame's eye triangles.
+fn eye_cell(uv: &[f32], used: usize) -> u8 {
+    let mut eyes: Vec<f32> = (0..used)
+        .filter_map(|t| {
+            let u = [uv[t * 6], uv[t * 6 + 2], uv[t * 6 + 4]];
+            let mean = (u[0] + u[1] + u[2]) / 3.0;
+            let span = u.iter().fold(f32::MIN, |a, &b| a.max(b)) - u.iter().fold(f32::MAX, |a, &b| a.min(b));
+            (span > 1e-4 && (5.0 / 11.0..9.0 / 11.0).contains(&mean)).then_some(mean)
+        })
+        .collect();
+    eyes.sort_by(f32::total_cmp);
+    eyes.get(eyes.len() / 2).map(|m| (m * 11.0) as u8).unwrap_or(5)
 }
 
 fn load_surfaces(surfaces: &[sm64::SM64Surface]) {
@@ -2169,21 +2186,7 @@ fn frame(data: &FD4TaskData) {
             // peace sign: SM64 swapped the right hand's mesh (more triangles than the fist)
             let right_hand = tri_part[..ctx.geo.used()].iter().filter(|&&p| p == 9).count();
             let peace = right_hand > engine_mario::FIST_TRIANGLES;
-            // which eye texture SM64 is drawing (cells 5 open, 6 half, 7 closed, 8 dead): the median
-            // texture cell of this frame's eye triangles
-            let eye_cell = {
-                let uv = &ctx.geo.uv;
-                let mut eyes: Vec<f32> = (0..ctx.geo.used())
-                    .filter_map(|t| {
-                        let u = [uv[t * 6], uv[t * 6 + 2], uv[t * 6 + 4]];
-                        let mean = (u[0] + u[1] + u[2]) / 3.0;
-                        let span = u.iter().fold(f32::MIN, |a, &b| a.max(b)) - u.iter().fold(f32::MAX, |a, &b| a.min(b));
-                        (span > 1e-4 && (5.0 / 11.0..9.0 / 11.0).contains(&mean)).then_some(mean)
-                    })
-                    .collect();
-                eyes.sort_by(f32::total_cmp);
-                eyes.get(eyes.len() / 2).map(|m| (m * 11.0) as u8).unwrap_or(5)
-            };
+            let eye_cell = eye_cell(&ctx.geo.uv, ctx.geo.used());
             let parts = engine_mario::relative_parts(&mats, count, state.position, eye_cell, peace);
             let hits = if alive { combat::hits(id, &state, &target_pos, &no_stomp) } else { Vec::new() };
             (state, ctx.geo.position[..n].to_vec(), ctx.geo.color[..n].to_vec(), ctx.geo.normal[..n].to_vec(), parts, hits)
@@ -2521,7 +2524,8 @@ fn frame(data: &FD4TaskData) {
                     };
                     // (relative to where the step left him, not where it started: his parts would
                     // shift by each step's own movement)
-                    (state, engine_mario::relative_parts(&mats, count, state.position, 5, false))
+                    let eyes = eye_cell(&ctx.geo.uv, ctx.geo.used());
+                    (state, engine_mario::relative_parts(&mats, count, state.position, eyes, false))
                 });
                 if let Some((state, parts)) = parts {
                     FOLLOW_TRACE.lock().unwrap_or_else(|e| e.into_inner()).push(format!("{:x}/{}", state.action & 0x1FF, state.anim_id));
@@ -2551,8 +2555,9 @@ fn frame(data: &FD4TaskData) {
         }
     }
 
-    // F2 (debug): every Site of Grace unlocked (their "lit" event flags from BonfireWarpParam),
-    // for testing around the world. Offline Mario save only.
+    // F2 (debug): every Site of Grace unlocked (their "lit" event flags from BonfireWarpParam)
+    // and the whole map revealed (WorldMapPieceParam), for testing around the world.
+    // Offline Mario save only.
     {
         static F2_WAS: AtomicBool = AtomicBool::new(false);
         let f2 = debug_key(0x71);
@@ -2569,6 +2574,17 @@ fn frame(data: &FD4TaskData) {
                     }
                 }
                 log(format!("graces: {n} unlocked"));
+                let mut pieces = 0;
+                for i in 0..1000 {
+                    let Some(row) = repo.get_row_by_index::<eldenring::cs::WorldMapPieceParam>(i) else { break };
+                    for flag in [row.open_event_flag_id(), row.acquisition_event_flag_id()] {
+                        if flag != 0 {
+                            flags.virtual_memory_flag.set_flag(flag, true);
+                        }
+                    }
+                    pieces += 1;
+                }
+                log(format!("map: {pieces} pieces revealed"));
             }
         } else if !f2 {
             F2_WAS.store(false, Ordering::Relaxed);
