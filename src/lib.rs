@@ -788,6 +788,21 @@ fn havok_surfaces(h: &mut havok_col::HavokCollision, origin: [f32; 3], mario: [f
     Some(out)
 }
 
+/// Which eye texture SM64 is drawing (cells 5 open, 6 half, 7 closed, 8 dead): the median
+/// texture cell of this frame's eye triangles.
+fn eye_cell(uv: &[f32], used: usize) -> u8 {
+    let mut eyes: Vec<f32> = (0..used)
+        .filter_map(|t| {
+            let u = [uv[t * 6], uv[t * 6 + 2], uv[t * 6 + 4]];
+            let mean = (u[0] + u[1] + u[2]) / 3.0;
+            let span = u.iter().fold(f32::MIN, |a, &b| a.max(b)) - u.iter().fold(f32::MAX, |a, &b| a.min(b));
+            (span > 1e-4 && (5.0 / 11.0..9.0 / 11.0).contains(&mean)).then_some(mean)
+        })
+        .collect();
+    eyes.sort_by(f32::total_cmp);
+    eyes.get(eyes.len() / 2).map(|m| (m * 11.0) as u8).unwrap_or(5)
+}
+
 fn load_surfaces(surfaces: &[sm64::SM64Surface]) {
     let s = surfaces.to_vec();
     worker::call("load surfaces", move |_| unsafe { sm64::sm64_static_surfaces_load(s.as_ptr(), s.len() as u32) });
@@ -2092,21 +2107,7 @@ fn frame(data: &FD4TaskData) {
             // peace sign: SM64 swapped the right hand's mesh (more triangles than the fist)
             let right_hand = tri_part[..ctx.geo.used()].iter().filter(|&&p| p == 9).count();
             let peace = right_hand > engine_mario::FIST_TRIANGLES;
-            // which eye texture SM64 is drawing (cells 5 open, 6 half, 7 closed, 8 dead): the median
-            // texture cell of this frame's eye triangles
-            let eye_cell = {
-                let uv = &ctx.geo.uv;
-                let mut eyes: Vec<f32> = (0..ctx.geo.used())
-                    .filter_map(|t| {
-                        let u = [uv[t * 6], uv[t * 6 + 2], uv[t * 6 + 4]];
-                        let mean = (u[0] + u[1] + u[2]) / 3.0;
-                        let span = u.iter().fold(f32::MIN, |a, &b| a.max(b)) - u.iter().fold(f32::MAX, |a, &b| a.min(b));
-                        (span > 1e-4 && (5.0 / 11.0..9.0 / 11.0).contains(&mean)).then_some(mean)
-                    })
-                    .collect();
-                eyes.sort_by(f32::total_cmp);
-                eyes.get(eyes.len() / 2).map(|m| (m * 11.0) as u8).unwrap_or(5)
-            };
+            let eye_cell = eye_cell(&ctx.geo.uv, ctx.geo.used());
             let parts = engine_mario::relative_parts(&mats, count, state.position, eye_cell, peace);
             let hits = if alive { combat::hits(id, &state, &target_pos, &no_stomp) } else { Vec::new() };
             (state, ctx.geo.position[..n].to_vec(), ctx.geo.color[..n].to_vec(), ctx.geo.normal[..n].to_vec(), parts, hits)
@@ -2376,7 +2377,8 @@ fn frame(data: &FD4TaskData) {
                     };
                     // (relative to where the step left him, not where it started: his parts would
                     // shift by each step's own movement)
-                    (state, engine_mario::relative_parts(&mats, count, state.position, 5, false))
+                    let eyes = eye_cell(&ctx.geo.uv, ctx.geo.used());
+                    (state, engine_mario::relative_parts(&mats, count, state.position, eyes, false))
                 });
                 if let Some((state, parts)) = parts {
                     FOLLOW_TRACE.lock().unwrap_or_else(|e| e.into_inner()).push(format!("{:x}/{}", state.action & 0x1FF, state.anim_id));
