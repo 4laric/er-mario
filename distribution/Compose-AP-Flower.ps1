@@ -1,5 +1,7 @@
 [CmdletBinding()]
-param([Parameter(Mandatory)][string]$GameDir,[Parameter(Mandatory)][string]$Witchy,[string]$MarioDir=$PSScriptRoot)
+param([Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$GameDir,[Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$Witchy,[string]$MarioDir)
+# Windows PowerShell binds advanced-script parameter defaults before PSScriptRoot is populated.
+if ([string]::IsNullOrWhiteSpace($MarioDir)) { $MarioDir = $PSScriptRoot }
 $ErrorActionPreference='Stop'
 if(Get-CimInstance Win32_Process -Filter "Name = 'eldenring.exe'"){throw 'Save and quit Elden Ring before composing menu atlases.'}
 $python=Get-Command py -ErrorAction SilentlyContinue
