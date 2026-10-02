@@ -68,6 +68,13 @@ static void lifts(void) {
     assert(fabsf(m->pos[0] - 20) < 0.1f && fabsf(m->pos[2] + 70) < 0.1f);
     sync_and_check_floor();
 
+    object.transform.eulerRotation[0] = -15;
+    object.transform.eulerRotation[1] = -20;
+    object.transform.eulerRotation[2] = -10;
+    surface_object_update_transform(id, &object.transform);
+    apply_mario_platform_displacement();
+    sync_and_check_floor(); /* pitch/roll must move both the rider and its floor */
+
     m->pos[1] += 200; mario.oPosY = m->pos[1];
     m->action = ACT_FREEFALL;
     update_mario_platform();
