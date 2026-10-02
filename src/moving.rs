@@ -21,6 +21,7 @@ struct Tracked {
     id: u32,
     /// rotation when the object was built (its triangles are baked in that pose)
     q0: Quat,
+    shape: usize,
     /// its triangles (body space), to measure how far Mario is from the nearest one
     mesh: std::sync::Arc<crate::havok_col::Mesh>,
 }
@@ -55,6 +56,7 @@ impl Moving {
     /// Every tick. Returns true when the static collision must be rebuilt (a body became dynamic or
     /// went back to static).
     pub fn update(&mut self, h: &mut HavokCollision, origin: [f32; 3], mario: [f32; 3]) -> bool {
+        h.refresh_bodies();
         let mut rebuild = false;
         // newly moving bodies -> surface objects
         let moved: Vec<u32> = self
@@ -68,47 +70,28 @@ impl Moving {
             .map(|(i, _)| *i)
             .collect();
         for i in moved {
-            self.watch.remove(&i);
-            let (Some(mesh), Some((p, q))) = (h.mesh_of(i), h.transform(i)) else { continue };
+            let Some((p, q, _)) = self.watch.remove(&i) else { continue };
+            let Some(mesh) = h.mesh_of(i) else { continue };
+            // Build at the last static pose, attach riders there, then apply this tick's motion.
+            // Building at the new pose discards the first displacement of a starting lift.
             if mesh.tris().len() > MAX_TRIS {
                 continue;
             }
             let center = sm(origin, p);
-            let m = Vec3::from(mario);
             // convex shapes: every face points away from the middle (built once, so it must not depend
             // on where Mario happens to be)
-            let convex_middle = h.is_convex(i).then(|| {
+            let convex_middle = (h.is_convex(i) || h.is_boxed(i)).then(|| {
                 let local = mesh.tris().iter().flatten().copied().sum::<Vec3>() / (mesh.tris().len() * 3) as f32;
                 sm(origin, q * local + p)
             });
             let mut surfaces = Vec::with_capacity(mesh.tris().len());
             for t in mesh.tris() {
                 let w = t.map(|v| sm(origin, q * v + p));
-                let n = (w[1] - w[0]).cross(w[2] - w[1]);
-                if n.length_squared() < 1.0 {
-                    continue;
+                let local = w.map(|v| (v - center).round().to_array().map(|x| x as i32));
+                let mid = convex_middle.map(|mid| (mid - center).to_array());
+                if let Some(v) = crate::collision_geometry::surface_vertices(local, mid) {
+                    surfaces.push(sm64::SM64Surface::grass(v));
                 }
-                let n = n.normalize();
-                // face each triangle the way Mario meets it (like the static collision)
-                let want = if let Some(mid) = convex_middle {
-                    (w[0] + w[1] + w[2]) / 3.0 - mid
-                } else if n.y > 0.2 {
-                    Vec3::Y
-                } else if n.y < -0.2 {
-                    -Vec3::Y
-                } else {
-                    let c = (w[0] + w[1] + w[2]) / 3.0;
-                    Vec3::new(m.x - c.x, 0.0, m.z - c.z)
-                };
-                let local = w.map(|v| {
-                    let l = (v - center).round();
-                    [l.x as i32, l.y as i32, l.z as i32]
-                });
-                let mut s = sm64::SM64Surface::grass(local);
-                if n.dot(want) < 0.0 {
-                    s.vertices.swap(1, 2);
-                }
-                surfaces.push(s);
             }
             if surfaces.is_empty() {
                 continue;
@@ -121,7 +104,7 @@ impl Moving {
             });
             if let Some(id) = id {
                 log(format!("moving: body #{i} is moving, now a surface object ({n} triangles)"));
-                self.tracked.insert(i, Tracked { id, q0: q, mesh: mesh.clone() });
+                self.tracked.insert(i, Tracked { id, q0: q, shape: h.shape_of(i), mesh: mesh.clone() });
                 h.exclude.insert(i);
                 rebuild = true;
             }
@@ -130,6 +113,10 @@ impl Moving {
         let mut moves = Vec::new();
         let mut forget = Vec::new();
         for (i, t) in &self.tracked {
+            if h.shape_of(*i) != t.shape {
+                forget.push(*i);
+                continue;
+            }
             let Some((p, q)) = h.transform(*i) else {
                 log(format!("moving: body #{i} gone (no transform), dropping"));
                 forget.push(*i);
@@ -144,12 +131,8 @@ impl Moving {
                 forget.push(*i);
                 continue;
             }
-            // rotation since creation, mirrored into SM64 space; SM64 objects turn about Y (yaw)
-            let d = q * t.q0.inverse();
-            let d = Quat::from_xyzw(d.x, -d.y, -d.z, d.w);
-            let f = d * Vec3::Z;
-            let yaw = f.x.atan2(f.z).to_degrees();
-            moves.push((t.id, sm64::SM64ObjectTransform { position: center.into(), euler_rotation: [0.0, yaw, 0.0] }));
+            let euler_rotation = platform_rotation(q * t.q0.inverse());
+            moves.push((t.id, sm64::SM64ObjectTransform { position: center.into(), euler_rotation }));
         }
         if !moves.is_empty() {
             worker::call("object move", move |_| {
@@ -204,6 +187,30 @@ impl Moving {
                     unsafe { sm64::sm64_surface_object_delete(id) };
                 }
             });
+        }
+    }
+}
+
+/// libsm64's ZXY matrix is R_y * R_x * R_z; its public API negates degree angles.
+fn platform_rotation(delta: Quat) -> [f32; 3] {
+    let mirrored = Quat::from_xyzw(delta.x, -delta.y, -delta.z, delta.w);
+    let (yaw, pitch, roll) = mirrored.to_euler(glam::EulerRot::YXZ);
+    [-pitch.to_degrees(), -yaw.to_degrees(), -roll.to_degrees()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn platform_rotation_matches_reflected_havok_in_all_axes() {
+        for q in [Quat::IDENTITY, Quat::from_rotation_y(0.7), Quat::from_euler(glam::EulerRot::YXZ, 0.7, -0.3, 0.2)] {
+            let angles = platform_rotation(q).map(|x| -x.to_radians());
+            let engine = Quat::from_euler(glam::EulerRot::YXZ, angles[1], angles[0], angles[2]);
+            let reflect = |v: Vec3| Vec3::new(-v.x, v.y, v.z);
+            for v in [Vec3::X, Vec3::Y, Vec3::Z] {
+                assert!((engine * v - reflect(q * reflect(v))).length() < 1e-5);
+            }
         }
     }
 }
