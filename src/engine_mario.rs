@@ -118,7 +118,8 @@ pub fn relative_parts(mats: &[f32], count: i32, mario: [f32; 3], eye_cell: u8, p
 
 /// Original skating stance, with both feet on the separate deck and arms balancing.
 /// Native mechanics own movement/actions; this changes only the rendered pose.
-pub fn skate_pose(parts: &mut [PartPose; PARTS], speed: f32, airborne: bool, lean: f32) {
+pub fn skate_pose(parts: &mut [PartPose; PARTS], speed: f32, airborne: bool, lean: f32,
+    push_phase: f32, trick: u32, trick_progress: f32) {
     let torso = parts[2];
     let mut up = (torso.rot * -Vec3::X).normalize_or_zero();
     if up.length_squared() < 0.5 { up = Vec3::Y; }
@@ -165,6 +166,41 @@ pub fn skate_pose(parts: &mut [PartPose; PARTS], speed: f32, airborne: bool, lea
         parts[hand].pos = wrist;
     }
     parts[PEACE].scale = 0.001;
+    if !airborne && push_phase.is_finite() && push_phase >= 0.0 {
+        let phase = push_phase.clamp(0.0,1.0);
+        let stroke = (phase * std::f32::consts::PI).sin().max(0.0);
+        let target = parts[12].pos - forward * (0.22 * stroke)
+            - across * (0.10 * stroke) - up * (0.07 * stroke);
+        let planted = parts[15].pos;
+        let balance = -up * (0.10 * stroke) - forward * (0.08 * stroke);
+        let cap_flying = parts[crate::assets::cappy::BARE_HEAD].scale >= 0.01;
+        for (i, part) in parts.iter_mut().enumerate().skip(1) {
+            if i == crate::assets::addons::BOARD || i == crate::assets::addons::FLASK
+                || (i == crate::assets::cappy::CAP && cap_flying) { continue; }
+            part.pos += balance;
+        }
+        skate_leg_target(parts,10,11,12,target,forward);
+        skate_leg_target(parts,13,14,15,planted,forward);
+        // Counterbalance the pushing leg with a small shoulder and hand motion.
+        for i in [4,5,6] { parts[i].pos += forward * (0.035 * stroke); }
+        for i in [7,8,9] { parts[i].pos -= forward * (0.035 * stroke); }
+    }
+    if airborne && matches!(trick,1..=3) && trick_progress.is_finite() {
+        let phase = trick_progress.clamp(0.0,1.0);
+        let lift = (phase * std::f32::consts::PI).sin().max(0.0) * 0.20;
+        let cap_flying = parts[crate::assets::cappy::BARE_HEAD].scale >= 0.01;
+        for (i, part) in parts.iter_mut().enumerate().skip(1) {
+            if i == crate::assets::addons::BOARD || i == crate::assets::addons::FLASK
+                || (i == crate::assets::cappy::CAP && cap_flying) { continue; }
+            part.pos += up * lift;
+        }
+        let spin = match trick {
+            2 => Quat::from_axis_angle(forward,phase * std::f32::consts::TAU),
+            3 => Quat::from_axis_angle(up,phase * std::f32::consts::PI),
+            _ => Quat::IDENTITY,
+        };
+        parts[crate::assets::addons::BOARD].rot = spin * board.rot;
+    }
     // Carve around the deck's forward axis; keep the native head, eyes and attachments together.
     // A flying cap remains on its own projectile path, and the hidden flask stays independent.
     let lean = if lean.is_finite() { lean.clamp(-1.0, 1.0) } else { 0.0 };
@@ -175,6 +211,36 @@ pub fn skate_pose(parts: &mut [PartPose; PARTS], speed: f32, airborne: bool, lea
         part.pos = board.pos + carve * (part.pos - board.pos);
         part.rot = carve * part.rot;
     }
+}
+
+/// Keep the pushing leg's segment lengths while moving its shoe off the deck.
+fn skate_leg_target(parts: &mut [PartPose; PARTS], thigh: usize, shin: usize, shoe: usize,
+    target: Vec3, bend_axis: Vec3) {
+    let hip = parts[thigh];
+    let knee = parts[shin];
+    let foot = parts[shoe];
+    let a = hip.pos.distance(knee.pos);
+    let b = knee.pos.distance(foot.pos);
+    if a <= 0.001 || b <= 0.001 { return; }
+    let direction = (target - hip.pos).normalize_or_zero();
+    if direction.length_squared() < 0.5 { return; }
+    let distance = hip.pos.distance(target).clamp((a-b).abs()+0.0001,a+b-0.0001);
+    let along = (a*a-b*b+distance*distance) / (2.0*distance);
+    let height = (a*a-along*along).max(0.0).sqrt();
+    let raw_bend = knee.pos - hip.pos;
+    let mut bend = (raw_bend-direction*raw_bend.dot(direction)).normalize_or_zero();
+    if bend.length_squared() < 0.5 {
+        bend = (bend_axis-direction*bend_axis.dot(direction)).normalize_or_zero();
+    }
+    let joint = hip.pos+direction*along+bend*height;
+    let end = hip.pos+direction*distance;
+    let orient = |from: Vec3,to: Vec3| if from.length_squared()>1e-8 && to.length_squared()>1e-8 {
+        Quat::from_rotation_arc(from.normalize(),to.normalize())
+    } else { Quat::IDENTITY };
+    parts[thigh].rot = orient(knee.pos-hip.pos,joint-hip.pos) * hip.rot;
+    parts[shin].rot = orient(foot.pos-knee.pos,end-joint) * knee.rot;
+    parts[shin].pos = joint;
+    parts[shoe].pos = end;
 }
 
 /// Presentation only: raise the native right arm, sip, then lower it during a flask drink.
@@ -234,6 +300,65 @@ fn squirt_stream_pose(torso: PartPose) -> PartPose {
 #[cfg(test)]
 mod skate_tests {
     use super::*;
+    fn fixture() -> [PartPose; PARTS] {
+        let rot = Quat::from_mat3(&Mat3::from_cols(-Vec3::Y, Vec3::Z, -Vec3::X));
+        let mut parts = [PartPose {rot,pos:Vec3::new(0.0,0.5,0.0),scale:1.0}; PARTS];
+        parts[12].pos = Vec3::new(-0.1,0.12,0.0);
+        parts[15].pos = Vec3::new(0.1,0.12,0.0);
+        parts[crate::assets::addons::FLASK].scale = 0.001;
+        parts[crate::assets::cappy::BARE_HEAD].scale = 0.001;
+        parts
+    }
+    #[test]
+    fn push_recovers_to_deck_and_preserves_both_leg_segment_lengths() {
+        let mut rest = fixture();
+        skate_pose(&mut rest,50.0,false,0.0,-1.0,0,0.0);
+        let upper = rest[10].pos.distance(rest[11].pos);
+        let lower = rest[11].pos.distance(rest[12].pos);
+        for phase in [0.0,0.25,0.5,0.75,1.0,-1.0,f32::INFINITY,f32::NAN] {
+            let mut parts = fixture();
+            skate_pose(&mut parts,50.0,false,0.0,phase,0,0.0);
+            assert!((parts[10].pos.distance(parts[11].pos)-upper).abs()<1e-4);
+            assert!((parts[11].pos.distance(parts[12].pos)-lower).abs()<1e-4);
+            assert!(parts[15].pos.distance(rest[15].pos)<1e-4);
+            assert!(parts.iter().all(|p| p.pos.is_finite() && p.rot.is_finite()));
+            if phase == 0.5 {
+                assert!(parts[12].pos.z < rest[12].pos.z - 0.05);
+                assert!(parts[12].pos.y < rest[12].pos.y);
+            }
+            if phase == 0.0 || phase == 1.0 || phase < 0.0 || !phase.is_finite() {
+                assert!(parts[12].pos.distance(rest[12].pos)<1e-4);
+            }
+        }
+    }
+    #[test]
+    fn tricks_spin_only_the_board_and_clear_it_before_returning_to_contact() {
+        let mut rest = fixture();
+        skate_pose(&mut rest,50.0,true,0.0,-1.0,0,0.0);
+        let initial = rest[crate::assets::addons::BOARD];
+        for trick in [1,2,3] {
+            for phase in [0.0,0.25,0.5,0.75,1.0,20.0,-20.0,f32::NAN] {
+                let mut parts = fixture();
+                skate_pose(&mut parts,50.0,true,0.0,-1.0,trick,phase);
+                let board = parts[crate::assets::addons::BOARD];
+                assert!(board.pos.distance(initial.pos)<1e-5);
+                assert!(parts.iter().all(|p| p.pos.is_finite() && p.rot.is_finite()));
+                if phase == 0.5 {
+                    assert!(parts[12].pos.y > board.pos.y+0.20);
+                    assert!(parts[15].pos.y > board.pos.y+0.20);
+                }
+                if phase == 1.0 {
+                    assert!(parts[12].pos.distance(rest[12].pos)<1e-4);
+                    if trick == 3 {
+                        assert!((board.rot*Vec3::Y).dot(initial.rot*Vec3::Y)< -0.999);
+                    } else {
+                        assert!(board.rot.dot(initial.rot).abs()>0.999);
+                    }
+                }
+                assert_eq!(parts[crate::assets::addons::FLASK].scale,0.001);
+            }
+        }
+    }
     #[test]
     fn stance_plants_both_feet_on_the_deck_and_keeps_flask_independent() {
         let rot = Quat::from_mat3(&Mat3::from_cols(-Vec3::Y, Vec3::Z, -Vec3::X));
@@ -244,7 +369,7 @@ mod skate_tests {
             parts[crate::assets::addons::FLASK].scale = 0.001;
             parts[crate::assets::cappy::BARE_HEAD].scale = 0.001;
             let flask = parts[crate::assets::addons::FLASK];
-            skate_pose(&mut parts,80.0,airborne,lean);
+            skate_pose(&mut parts,80.0,airborne,lean,-1.0,0,0.0);
             let board = parts[crate::assets::addons::BOARD];
             assert_eq!(board.scale,1.0);
             for shoe in [12,15] {

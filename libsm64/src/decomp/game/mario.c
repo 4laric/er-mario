@@ -1720,7 +1720,7 @@ s32 execute_mario_action(UNUSED struct Object *o) {
 
         // If Mario is OOB, stop executing actions.
         if (gMarioState->floor == NULL) {
-            er_skate_input(0, 0, 0, 0, 0, 0);
+            er_skate_input(0, 0, 0, 0, 0, 0, 0);
             er_fludd_input(0, 0, 0, 0);
             er_addons_input(0, 0, 0, 0);
             return 0;

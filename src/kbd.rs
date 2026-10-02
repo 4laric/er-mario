@@ -60,6 +60,7 @@ pub fn focused() -> bool {
 pub struct Keys {
     pub skate_toggle: bool,
     pub skate_ollie: bool,
+    pub skate_trick: u32,
     pub cappy: bool,
     pub spin: bool,
     pub dash: bool,
@@ -84,6 +85,7 @@ pub fn read() -> Option<Keys> {
     Some(Keys {
         skate_toggle: down(0x56),
         skate_ollie: down(0x52),
+        skate_trick: if down(0x11) { 3 } else if down(0x10) { 2 } else { 0 },
         stick_x: x / len,
         stick_y: y / len,
         a: down(VK_L) || down(VK_RBUTTON),

@@ -5,19 +5,20 @@
 #include "libsm64.h"
 #include "er_fludd.h"
 #include "decomp/include/sm64.h"
+#include "decomp/include/audio_defines.h"
 #include "decomp/game/mario.h"
 /* Production momentum/controller code, with explicit native collision seams. */
 struct ERFludd er_fludd;
 static struct SM64SurfaceCollisionData floor_surface;
 static struct Object object;
-static int ground_calls, air_calls, collision, fall_checks, injury, sounds, cancelled;
+static int ground_calls, air_calls, collision, fall_checks, injury, sounds, cancelled, foot_cues;
 u32 set_mario_action(struct MarioState *m,u32 a,u32 arg) {m->action=a;m->actionArg=arg;return 1;}
 void mario_set_forward_vel(struct MarioState *m,f32 speed) {
     float yaw=m->faceAngle[1]*3.14159265358979323846f/32768;
     m->forwardVel=speed;m->vel[0]=sinf(yaw)*speed;m->vel[2]=cosf(yaw)*speed;
 }
 s16 set_mario_animation(struct MarioState *m,s32 id) {(void)m;(void)id;return 0;}
-void play_sound(uint32_t id,f32 *pos) {(void)id;assert(pos);sounds++;}
+void play_sound(uint32_t id,f32 *pos) {assert(pos);sounds++;if(id==SOUND_ACTION_TERRAIN_STEP)foot_cues++;}
 void er_addons_input(uint32_t allowed,uint32_t c,uint32_t s,uint32_t d) {
     assert(!allowed&&!c&&!s&&!d);cancelled++;
 }
@@ -42,61 +43,110 @@ static struct MarioState mario(void) {
 }
 static void mount(struct MarioState *m) {
     er_skate_configure(1);er_skate_reset();
-    er_skate_input(1,0,0,0,0,0);assert(!er_skate_step(m));
-    er_skate_input(1,1,0,0,0,0);assert(er_skate_step(m));assert(er_skate.mounted);
-    er_skate_input(1,0,0,0,0,0);
+    er_skate_input(1,0,0,0,0,0,0);assert(!er_skate_step(m));
+    er_skate_input(1,1,0,0,0,0,0);assert(er_skate_step(m));assert(er_skate.mounted);
+    er_skate_input(1,0,0,0,0,0,0);
 }
 int main(void) {
     struct MarioState m=mario(),before=m;
-    er_skate_configure(0);er_skate_input(1,1,1,1,1,1);
+    er_skate_configure(0);er_skate_input(1,1,1,1,1,1,0);
     assert(!er_skate_step(&m)&&!memcmp(&m,&before,sizeof m));
     assert(!ground_calls&&!air_calls&&!sounds&&!cancelled);
     mount(&m);er_fludd.active=er_fludd.protected_fall=1;er_fludd.water=123;
-    er_skate_input(1,0,1,0,0,0);
+    er_skate_input(1,0,1,0,0,0,0);
     int g=ground_calls;
-    for(int i=0;i<100;i++)assert(er_skate_step(&m));
-    assert(ground_calls-g==100);assert(!air_calls);assert(er_skate.speed==90);assert(!er_fludd.active);
+    float top_speed=0;
+    for(int i=0;i<100;i++){assert(er_skate_step(&m));if(er_skate.speed>top_speed)top_speed=er_skate.speed;}
+    assert(ground_calls-g==100);assert(!air_calls);assert(top_speed==90&&er_skate.speed<=90&&er_skate.speed>85);assert(!er_fludd.active);
     assert(!er_fludd.protected_fall&&er_fludd.water==123);
     float fast=er_skate.speed;
     er_skate_configure(1);assert(er_skate.mounted&&er_skate.speed==fast); /* replay */
-    er_skate_input(1,0,0,0,0,0);assert(er_skate_step(&m));
+    er_skate_input(1,0,0,0,0,0,0);assert(er_skate_step(&m));
     assert(er_skate.speed<fast&&er_skate.speed>85); /* coast, not walk acceleration */
     er_skate.speed=20;floor_surface.normal.z=0.5f;
     er_skate_step(&m);assert(er_skate.speed>20); /* downhill */
     er_skate.speed=20;floor_surface.normal.z=-0.5f;
     er_skate_step(&m);assert(er_skate.speed<20); /* uphill */
     floor_surface.normal.z=0;
-    er_skate_input(1,0,1,1,0,0);
+    er_skate_input(1,0,1,1,0,0,0);
     for(int i=0;i<40;i++)er_skate_step(&m);
     assert(er_skate.speed==0); /* brake wins over push, never reverse */
-    er_skate_input(1,0,1,0,0,1);er_skate_step(&m);
+    er_skate.speed=10;
+    er_skate_input(1,0,1,0,0,1,0);er_skate_step(&m);
     assert(m.faceAngle[1]>0&&er_skate.lean>0&&m.vel[0]>0);
-    er_skate_input(1,0,0,0,0,NAN);assert(er_skate.steer==0);
+    er_skate_input(1,0,0,0,0,NAN,0);assert(er_skate.steer==0);
     collision=GROUND_STEP_HIT_WALL;float z=m.pos[2];er_skate_step(&m);
     assert(er_skate.speed==0&&m.pos[2]==z);collision=0;
-    er_skate_input(1,0,1,0,1,0);g=ground_calls;int a=air_calls;
+    er_skate_input(1,0,1,0,1,0,0);g=ground_calls;int a=air_calls;
     assert(er_skate_step(&m)&&ground_calls==g&&air_calls==a+1);
     assert(er_skate.airborne&&er_skate.trick==1&&m.vel[1]==40);
     float vy=m.vel[1];er_skate_step(&m);assert(m.vel[1]==vy-4); /* held X doesn't relaunch */
-    er_skate_input(1,1,0,0,0,0);er_skate_step(&m);assert(er_skate.mounted); /* no air dismount */
+    er_skate_input(1,1,0,0,0,0,0);er_skate_step(&m);assert(er_skate.mounted); /* no air dismount */
     collision=AIR_STEP_LANDED;er_skate_step(&m);
     assert(fall_checks==1&&er_skate.mounted&&!er_skate.airborne&&!er_skate.trick);
-    collision=0;er_skate_input(1,0,0,0,0,0);er_skate_step(&m);
-    er_skate_input(1,1,0,0,0,0);assert(!er_skate_step(&m)&&!er_skate.mounted);
-    mount(&m);er_skate_input(0,0,0,0,0,0);assert(!er_skate.mounted);
-    er_skate_input(1,1,0,0,1,0);assert(!er_skate_step(&m));
-    er_skate_input(1,0,0,0,0,0);er_skate_step(&m);
-    er_skate_input(1,1,0,0,0,0);assert(er_skate_step(&m)&&er_skate.mounted);
+    collision=0;er_skate_input(1,0,0,0,0,0,0);er_skate_step(&m);
+    er_skate_input(1,1,0,0,0,0,0);assert(!er_skate_step(&m)&&!er_skate.mounted);
+    mount(&m);er_skate_input(0,0,0,0,0,0,0);assert(!er_skate.mounted);
+    er_skate_input(1,1,0,0,1,0,0);assert(!er_skate_step(&m));
+    er_skate_input(1,0,0,0,0,0,0);er_skate_step(&m);
+    er_skate_input(1,1,0,0,0,0,0);assert(er_skate_step(&m)&&er_skate.mounted);
     m.action=ACT_GROUND_POUND;assert(!er_skate_step(&m)&&!er_skate.mounted);
     m=mario();mount(&m);m.health=0xff;assert(!er_skate_step(&m)&&!er_skate.mounted);
-    m=mario();mount(&m);er_skate_input(1,0,0,0,1,0);er_skate_step(&m);
+    m=mario();mount(&m);er_skate_input(1,0,0,0,1,0,0);er_skate_step(&m);
     injury=1;collision=AIR_STEP_LANDED;er_skate_step(&m);
     assert(fall_checks==2&&!er_skate.mounted&&er_skate.bail_ticks==15);
     collision=injury=0;m=mario();mount(&m);er_skate_reset();assert(!er_skate.mounted);
-    er_skate_input(1,1,0,0,0,0);assert(!er_skate_step(&m)); /* lifecycle held latch */
+    er_skate_input(1,1,0,0,0,0,0);assert(!er_skate_step(&m)); /* lifecycle held latch */
     m=mario();mount(&m);m.heldObj=&object;assert(!er_skate_step(&m)&&!er_skate.mounted);
     m=mario();mount(&m);m.floor=0;assert(!er_skate_step(&m)&&!er_skate.mounted);
     m=mario();mount(&m);er_skate_configure(0);before=m;
     assert(!er_skate_step(&m)&&!memcmp(&m,&before,sizeof m));
+    /* Force follows the same phase used by the foot pose. Twelve small
+       contact impulses preserve1.8 mean acceleration over a whole cycle. */
+    m=mario();mount(&m);er_skate.speed=20;int cues=foot_cues;
+    er_skate_input(1,0,1,0,0,0,0);
+    for(unsigned phase=1;phase<=24;phase++) {
+        float old_speed=er_skate.speed;int old_calls=ground_calls;
+        assert(er_skate_step(&m)&&ground_calls==old_calls+1);
+        assert(er_skate.push_phase==phase);
+        float delta=er_skate.speed-old_speed;
+        assert(fabsf(delta-((phase>=7&&phase<=18)?3.5f:-0.1f))<0.0001f);
+    }
+    assert(fabsf(er_skate.speed-60.8f)<0.001f&&foot_cues==cues+1);
+    er_skate_step(&m);assert(er_skate.push_phase==1);
+    er_skate_input(1,0,1,1,0,0,0);er_skate_step(&m);assert(!er_skate.push_phase);
+    er_skate_input(1,0,0,0,0,0,0);er_skate_step(&m);assert(!er_skate.push_phase);
+    /* Normal ollie, flip and shuvit have identical physics. Only a grounded
+       edge picks the animation, even if the modifier changes while airborne. */
+    float ollie_y=0,ollie_z=0,ollie_vy=0;
+    for(unsigned trick=0;trick<=3;trick++) {
+        if(trick==1)continue;
+        m=mario();mount(&m);er_skate.speed=30;
+        int old_air=air_calls,old_ground=ground_calls;
+        er_skate_input(1,0,1,0,1,0,trick);assert(er_skate_step(&m));
+        assert(air_calls==old_air+1&&ground_calls==old_ground);
+        assert(er_skate.trick==(trick?trick:1)&&er_skate.trick_ticks==1&&!er_skate.push_phase);
+        if(!trick){ollie_y=m.pos[1];ollie_z=m.pos[2];ollie_vy=m.vel[1];}
+        else {assert(m.pos[1]==ollie_y&&m.pos[2]==ollie_z&&m.vel[1]==ollie_vy);}
+        unsigned chosen=er_skate.trick;
+        er_skate_input(1,0,1,0,1,0,chosen==2?3:2);er_skate_step(&m);
+        assert(er_skate.trick==chosen&&er_skate.trick_ticks==2&&m.vel[1]==36);
+        er_skate_input(1,0,1,0,0,0,2);er_skate_step(&m);
+        er_skate_input(1,0,1,0,1,0,3);er_skate_step(&m);
+        assert(er_skate.trick==chosen&&er_skate.trick_ticks==4&&m.vel[1]==28);
+        for(int i=0;i<30;i++)er_skate_step(&m);
+        assert(er_skate.trick_ticks==20&&!er_skate.push_phase);
+        float progress=(float)er_skate.trick_ticks/20;
+        assert(isfinite(progress)&&progress==1);
+        collision=AIR_STEP_LANDED;er_skate_step(&m);collision=0;
+        assert(!er_skate.trick&&!er_skate.trick_ticks&&!er_skate.airborne);
+    }
+    m=mario();mount(&m);er_skate_input(1,0,0,0,1,0,999);er_skate_step(&m);
+    assert(er_skate.trick==1); /* Unknown modifier is ordinary ollie. */
+    er_skate_input(0,1,1,0,1,1,3);
+    assert(!er_skate.trick&&!er_skate.trick_ticks&&!er_skate.push_phase);
+    m=mario();mount(&m);er_skate_input(1,0,0,0,1,0,2);er_skate_step(&m);
+    m.hurtCounter=1;assert(!er_skate_step(&m));
+    assert(!er_skate.mounted&&!er_skate.trick_ticks&&!er_skate.trick&&!er_skate.push_phase);
     return 0;
 }

@@ -171,6 +171,9 @@ Set `skateboard = on` in `er_mario.ini`. **D-pad Left / V** mounts or dismounts
 while safely grounded; **RB + D-pad Left** still selects FLUDD Squirt.
 On the board, hold **A / L / right mouse** to push, use the **left stick / A-D**
 to carve, hold **B / comma / left mouse** to brake, and press **X / R** to ollie.
+Use **RB + X / Shift + R** for a kickflip or **LT + X / Ctrl + R** for a shuv-it.
+Choose the trick when jumping; airborne presses add no lift or speed. Mario pushes
+with his rear foot, then tucks his feet while the board flips or turns beneath him.
 The board carries momentum, accelerates downhill, and uses Mario's native ground
 and airborne collision steps. Landing retains speed. Hits, forced actions, menus
 and travel dismount; release the mount button before mounting again.
@@ -178,8 +181,8 @@ FLUDD, Cappy, Sonic and flask input are suspended while riding. **R3 / Q** still
 locks on; dismount to use Mario's normal moves and drink a flask.
 
 This is an original Skate-inspired riding controller and procedural board, with
-no Skate 3 code or assets. It currently implements riding and ollies; manuals,
-flip tricks, rail grinding and Skate 3 physics parity are not implemented.
+no Skate 3 code or assets. It implements riding, foot pushes, ollies, kickflips and shuv-its; manuals,
+rail grinding and Skate 3 physics parity are not implemented.
 Asset version 7 requires a one-time model rebuild and restart on update.
 
 Windows, with [Rust](https://rustup.rs), Visual Studio Build Tools (C++),

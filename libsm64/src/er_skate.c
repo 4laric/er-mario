@@ -17,6 +17,7 @@ s32 lava_boost_on_wall(struct MarioState *m);
 
 static void dismount(void) {
     er_skate.mounted = er_skate.airborne = er_skate.trick = 0;
+    er_skate.push_phase = er_skate.trick_ticks = 0;
     er_skate.speed = er_skate.lean = 0;
 }
 void er_skate_reset(void) {
@@ -33,10 +34,11 @@ void er_skate_configure(uint32_t enabled) {
     er_skate_reset();
 }
 void er_skate_input(uint32_t allowed, uint32_t toggle, uint32_t push,
-                    uint32_t brake, uint32_t ollie, float steer) {
+                    uint32_t brake, uint32_t ollie, float steer, uint32_t trick) {
     er_skate.allowed = !!allowed;
     er_skate.toggle = !!toggle; er_skate.push = !!push;
     er_skate.brake = !!brake; er_skate.ollie = !!ollie;
+    er_skate.trick_request = trick == 2 || trick == 3 ? trick : 0;
     er_skate.steer = isfinite(steer) ? fmaxf(-1, fminf(1, steer)) : 0;
     if (!allowed) {
         dismount();
@@ -84,18 +86,29 @@ int er_skate_step(struct MarioState *m) {
     int turn = (int)(er_skate.steer * (ground ? 600.0f : 260.0f));
     m->faceAngle[1] += turn;
     er_skate.lean += (er_skate.steer - er_skate.lean) * 0.25f;
+    /* Twelve contact ticks in a 24-tick push cycle preserve the old mean
+       acceleration. Force is distributed across the foot plant, never a
+       single large impulse; air, braking and release immediately stop it. */
+    if (ground && er_skate.push && !er_skate.brake && !ollie)
+        er_skate.push_phase = er_skate.push_phase % 24 + 1;
+    else er_skate.push_phase = 0;
     if (ground) {
         float yaw = m->faceAngle[1] * (3.14159265358979323846f / 32768.0f);
         float slope = m->floor->normal.x * sinf(yaw) + m->floor->normal.z * cosf(yaw);
         er_skate.speed += slope * 2.8f;
-        if (er_skate.push && !er_skate.brake) er_skate.speed += 1.8f;
+        if (er_skate.push_phase >= 7 && er_skate.push_phase <= 18)
+            er_skate.speed += 3.6f;
+        if (er_skate.push_phase == 7)
+            play_sound(SOUND_ACTION_TERRAIN_STEP + m->terrainSoundAddend, m->marioObj->header.gfx.cameraToObject);
         er_skate.speed -= er_skate.brake ? 3.5f : 0.10f + fabsf(er_skate.steer) * 0.16f;
         er_skate.speed = fmaxf(0, fminf(90, er_skate.speed));
         if (ollie) {
             float speed = er_skate.speed;
             set_mario_action(m, ACT_FREEFALL, 0);
             m->vel[1] = 44; m->peakHeight = m->pos[1];
-            er_skate.speed = speed; er_skate.trick = 1; ground = 0;
+            er_skate.speed = speed;
+            er_skate.trick = er_skate.trick_request ? er_skate.trick_request : 1;
+            er_skate.trick_ticks = 0; ground = 0;
             play_sound(SOUND_ACTION_TERRAIN_JUMP + m->terrainSoundAddend, m->marioObj->header.gfx.cameraToObject);
         }
     }
@@ -113,6 +126,7 @@ int er_skate_step(struct MarioState *m) {
             set_mario_action(m, ACT_FREEFALL, 0);
             m->peakHeight = m->pos[1]; ground = 0;
         } else if (result == GROUND_STEP_HIT_WALL) {
+            er_skate.push_phase = 0;
             er_skate.speed = 0; mario_set_forward_vel(m, 0);
         }
     } else {
@@ -124,7 +138,8 @@ int er_skate_step(struct MarioState *m) {
             int injury = check_fall_damage_or_get_stuck(m, ACT_HARD_BACKWARD_GROUND_KB);
             if (injury || m->hurtCounter) { dismount(); er_skate.bail_ticks = 15; }
             else {
-                set_mario_action(m, ACT_WALKING, 0); er_skate.trick = 0; ground = 1;
+                set_mario_action(m, ACT_WALKING, 0);
+                er_skate.trick = er_skate.trick_ticks = 0; ground = 1;
                 play_sound(SOUND_ACTION_TERRAIN_LANDING + m->terrainSoundAddend, m->marioObj->header.gfx.cameraToObject);
             }
         } else if (result == AIR_STEP_HIT_WALL) {
@@ -134,5 +149,9 @@ int er_skate_step(struct MarioState *m) {
         }
     }
     er_skate.airborne = er_skate.mounted && !ground;
+    if (er_skate.airborne) {
+        er_skate.push_phase = 0;
+        if (er_skate.trick && er_skate.trick_ticks < 20) er_skate.trick_ticks++;
+    }
     return 1;
 }

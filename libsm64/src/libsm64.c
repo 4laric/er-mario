@@ -60,13 +60,15 @@ struct ObjPool s_mario_instance_pool = { 0, 0 };
 /* Internal worker-only FLUDD entry points, intentionally not DLL exports. */
 void sm64_er_skate_configure(uint32_t enabled) { er_skate_configure(enabled); }
 void sm64_er_skate_reset(void) { er_skate_reset(); }
-void sm64_er_skate_input(uint32_t allowed, uint32_t toggle, uint32_t push, uint32_t brake, uint32_t ollie, float steer) {
-    er_skate_input(allowed, toggle, push, brake, ollie, steer);
+void sm64_er_skate_input(uint32_t allowed, uint32_t toggle, uint32_t push, uint32_t brake, uint32_t ollie, float steer, uint32_t trick) {
+    er_skate_input(allowed, toggle, push, brake, ollie, steer, trick);
 }
 void sm64_er_skate_get_state(uint32_t *out, float *motion) {
     out[0]=er_skate.enabled; out[1]=er_skate.mounted; out[2]=er_skate.airborne;
     out[3]=er_skate.trick; out[4]=er_skate.bail_ticks;
+    out[5]=er_skate.push_phase; out[6]=er_skate.trick_ticks;
     motion[0]=er_skate.speed; motion[1]=er_skate.lean;
+    motion[2]=(float)er_skate.trick_ticks / 20.0f;
 }
 void sm64_er_cappy_configure(uint32_t enabled, uint32_t mask) { er_cappy_configure(enabled, mask); }
 void sm64_er_sonic_configure(uint32_t enabled, uint32_t mask) { er_sonic_configure(enabled, mask); }

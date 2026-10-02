@@ -1912,6 +1912,7 @@ fn frame(data: &FD4TaskData) {
         SM64_TICKS.fetch_add(1, Ordering::Relaxed);
         let (mut cap_held, mut spin_held, mut air_dash) = (false, false, false);
         let riding = skate::visual().mounted;
+        let mut skate_trick = 0u32;
         let (mut skate_toggle, mut skate_push, mut skate_brake, mut skate_ollie, mut skate_steer) = (false, false, false, false, 0.0f32);
         let mut fludd_held = false;
         let mut fludd_select = 0u32;
@@ -1929,6 +1930,7 @@ fn frame(data: &FD4TaskData) {
             skate_push = g.wButtons.contains(XINPUT_GAMEPAD_A);
             skate_brake = g.wButtons.contains(XINPUT_GAMEPAD_B);
             skate_ollie = g.wButtons.contains(XINPUT_GAMEPAD_X);
+            if skate_ollie { skate_trick = if g.bLeftTrigger > 100 { 3 } else if g.wButtons.contains(XINPUT_GAMEPAD_RIGHT_SHOULDER) { 2 } else { 0 }; }
             skate_steer = -axis(g.sThumbLX);
             cap_held = g.bRightTrigger > 100;
             spin_held = g.wButtons.contains(XINPUT_GAMEPAD_LEFT_THUMB);
@@ -1962,6 +1964,7 @@ fn frame(data: &FD4TaskData) {
                 skate_toggle |= skate::enabled() && k.skate_toggle;
                 skate_push |= k.a;
                 skate_brake |= k.b;
+                if k.skate_ollie && !skate_ollie { skate_trick = k.skate_trick; }
                 skate_ollie |= k.skate_ollie;
                 if skate_steer == 0.0 { skate_steer = -k.stick_x; }
                 inputs.button_a |= k.a as u8;
@@ -2254,7 +2257,7 @@ fn frame(data: &FD4TaskData) {
                 unsafe { sm64::sm64_play_sound_global(SOUND_HEART) };
             }
             unsafe {
-                sm64::sm64_er_skate_input(skate_allowed as u32, skate_toggle as u32, skate_push as u32, skate_brake as u32, skate_ollie as u32, skate_steer);
+                sm64::sm64_er_skate_input(skate_allowed as u32, skate_toggle as u32, skate_push as u32, skate_brake as u32, skate_ollie as u32, skate_steer, skate_trick);
                 sm64::sm64_er_addons_input(addons_allowed as u32, cap_held as u32, spin_held as u32, air_dash as u32);
                 sm64::sm64_er_fludd_input(addons_allowed as u32, fludd_held as u32, fludd_select, fludd_cycle as u32);
                 if rested { sm64::sm64_er_fludd_refill(); }
@@ -2285,7 +2288,7 @@ fn frame(data: &FD4TaskData) {
             let mut parts = engine_mario::relative_parts(&mats, count, state.position, eye_cell, peace);
             if let (Some(parts), Some(progress)) = (parts.as_mut(), flask_pose) { engine_mario::flask_pose(parts, progress); }
             let board = skate::visual();
-            if let Some(parts) = parts.as_mut().filter(|_| board.mounted) { engine_mario::skate_pose(parts, board.speed, board.airborne, board.lean); }
+            if let Some(parts) = parts.as_mut().filter(|_| board.mounted) { engine_mario::skate_pose(parts, board.speed, board.airborne, board.lean, board.push_phase, board.trick, board.trick_progress); }
             let hits = if alive { combat::hits(id, &state, &target_pos, &no_stomp) } else { Vec::new() };
             (state, ctx.geo.position[..n].to_vec(), ctx.geo.color[..n].to_vec(), ctx.geo.normal[..n].to_vec(), parts, hits)
         });
