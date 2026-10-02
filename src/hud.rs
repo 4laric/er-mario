@@ -288,6 +288,15 @@ struct Meter {
 
 /// Starts the overlay (hooks the game's DirectX 12 presentation).
 pub fn install(module: usize) {
+    // This named lock is shared with the AP client. It must cover construction
+    // too: MinHook captures the prior prologue while creating its trampoline.
+    let _install_guard = match crate::hud_install_lock::HudInstallLock::acquire() {
+        Ok(guard) => guard,
+        Err(e) => {
+            log(format!("hud: overlay installation lock failed: {e}"));
+            return;
+        }
+    };
     use hudhook::hooks::dx12::ImguiDx12Hooks;
     let hmodule = hudhook::windows::Win32::Foundation::HINSTANCE(module as _);
     let overlay = Overlay { textures: Vec::new(), meter: None };

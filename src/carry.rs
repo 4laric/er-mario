@@ -53,6 +53,9 @@ fn key(h: &FieldInsHandle) -> u64 {
 /// Mario's punch landed on `h` (a regular enemy): lifts it if Mario is behind it and it isn't too
 /// big. True: picked up (no normal damage).
 pub fn try_pick_up(h: &FieldInsHandle, mario: Vec3, radius_m: f32, height_m: f32) -> bool {
+    if !crate::ap_capabilities::allows(crate::ap_capabilities::ENEMY_GRAB) {
+        return false;
+    }
     let mut phase = PHASE.lock().unwrap_or_else(|e| e.into_inner());
     if !matches!(*phase, Phase::Idle) || radius_m > MAX_RADIUS || height_m > MAX_HEIGHT {
         return false;
@@ -152,7 +155,25 @@ pub fn is_carried(h: &FieldInsHandle) -> bool {
 }
 
 pub fn reset() {
-    *PHASE.lock().unwrap_or_else(|e| e.into_inner()) = Phase::Idle;
+    let mut phase = PHASE.lock().unwrap_or_else(|e| e.into_inner());
+    let mob = match *phase {
+        Phase::Held { mob, .. } | Phase::Flying { mob, .. } | Phase::Limp { mob, .. } => Some(mob),
+        Phase::Idle => None,
+    };
+    if let (Some(mob), Ok(wcm)) = (mob, unsafe { WorldChrMan::instance_mut() }) {
+        if let Some(chr) = wcm.chr_ins_by_handle_mut(&mob) {
+            chr.modules.physics.gravity_disabled = false;
+            if chr.modules.data.hp > 0 {
+                chr.chr_ctrl.chr_ragdoll_state = 0;
+                chr.chr_ctrl.ragdoll_revive_time = 1.0;
+            }
+        }
+    }
+    *phase = Phase::Idle;
+    START.store(false, Ordering::Relaxed);
+    if mob.is_some() {
+        DROP.store(true, Ordering::Relaxed);
+    }
 }
 
 /// Another enemy the thrown one (at `p`) runs into: within a body's width, overlapping in height.
@@ -191,6 +212,10 @@ pub fn update(
     action: u32,
     hit: impl Fn(Vec3, Vec3) -> Option<Vec3>,
 ) -> Vec<(FieldInsHandle, f32)> {
+    if !crate::ap_capabilities::allows(crate::ap_capabilities::ENEMY_GRAB) {
+        reset();
+        return Vec::new();
+    }
     let Ok(wcm) = (unsafe { WorldChrMan::instance_mut() }) else { return Vec::new() };
     let mut phase = PHASE.lock().unwrap_or_else(|e| e.into_inner());
     // Mario's forward in game coordinates (SM64 is mirrored on X)

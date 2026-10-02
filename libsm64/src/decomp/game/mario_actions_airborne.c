@@ -1,4 +1,5 @@
 #include <math.h>
+#include "../../ap_capabilities.h"
 
 #include "../include/PR/ultratypes.h"
 #include "../shim.h"
@@ -1143,7 +1144,7 @@ u32 common_air_knockback_step(struct MarioState *m, u32 landAction, u32 hardFall
 }
 
 s32 check_wall_kick(struct MarioState *m) {
-    if ((m->input & INPUT_A_PRESSED) && m->wallKickTimer != 0 && m->prevAction == ACT_AIR_HIT_WALL) {
+    if (er_ap_allows(4) && (m->input & INPUT_A_PRESSED) && m->wallKickTimer != 0 && m->prevAction == ACT_AIR_HIT_WALL) {
         m->faceAngle[1] += 0x8000;
         return set_mario_action(m, ACT_WALL_KICK_AIR, 0);
     }
@@ -1310,7 +1311,7 @@ s32 act_air_hit_wall(struct MarioState *m) {
     }
 
     if (++(m->actionTimer) <= 2) {
-        if (m->input & INPUT_A_PRESSED) {
+        if (er_ap_allows(4) && (m->input & INPUT_A_PRESSED)) {
             m->vel[1] = 52.0f;
             m->faceAngle[1] += 0x8000;
             return set_mario_action(m, ACT_WALL_KICK_AIR, 0);

@@ -337,6 +337,9 @@ pub fn toughness_of(h: &FieldInsHandle) -> Option<(f32, f32)> {
 
 /// A hit landed on `h`: if its stance is broken, Mario grabs it (returns true: no normal damage).
 pub fn try_grab(h: &FieldInsHandle, radius_m: f32) -> bool {
+    if !crate::ap_capabilities::allows(crate::ap_capabilities::BOSS_SWING) {
+        return false;
+    }
     let mut st = STATE.lock().unwrap_or_else(|e| e.into_inner());
     if !matches!(st.phase, Phase::Idle) {
         return false;
@@ -361,6 +364,10 @@ pub fn take_start() -> bool {
 /// `face` SM64 face angle, `action` Mario's SM64 action. Returns an impact: (boss, damage share
 /// of max HP in %).
 pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, Vec3) -> Option<Vec3>) -> Option<(FieldInsHandle, f32)> {
+    if !crate::ap_capabilities::allows(crate::ap_capabilities::BOSS_SWING) {
+        reset();
+        return None;
+    }
     let Ok(wcm) = (unsafe { WorldChrMan::instance_mut() }) else { return None };
     let mut st = STATE.lock().unwrap_or_else(|e| e.into_inner());
     // Mario's forward in game coordinates (SM64 is mirrored on X)
@@ -620,4 +627,5 @@ pub fn reset() {
     }
     st.phase = Phase::Idle;
     st.open.clear();
+    START.store(false, std::sync::atomic::Ordering::Relaxed);
 }

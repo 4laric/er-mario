@@ -134,6 +134,8 @@ impl Drop for GeometryGuard<'_> {
 }
 
 unsafe extern "C" {
+    pub fn sm64_er_ap_set_capabilities(managed: u32, unlocked: u32);
+    pub fn sm64_er_ap_attack_allowed(action: u32) -> i32;
     pub fn sm64_global_init(rom: *const u8, out_texture: *mut u8);
     pub fn sm64_static_surfaces_load(surfaces: *const SM64Surface, count: u32);
     pub fn sm64_mario_create(x: f32, y: f32, z: f32) -> i32;

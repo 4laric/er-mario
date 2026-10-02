@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <math.h>
+#include "../../ap_capabilities.h"
 
 #include "../shim.h"
 #include "../include/PR/os_cont.h"
@@ -986,6 +987,14 @@ static u32 set_mario_action_cutscene(struct MarioState *m, u32 action, UNUSED u3
  * specific function if needed.
  */
 u32 set_mario_action(struct MarioState *m, u32 action, u32 actionArg) {
+    // Filter before action initialization changes jump velocity / forward speed.
+    u32 filtered;
+    // Action executors retry transitions while this returns TRUE. A blocked
+    // ground-pound/dive from freefall must not retry the same pressed input
+    // forever, or restart the current jump and grant another upward impulse.
+    if (!er_ap_prepare_action(action, m->action, &filtered)) return FALSE;
+    if (filtered != action) actionArg = 0;
+    action = filtered;
     switch (action & ACT_GROUP_MASK) {
         case ACT_GROUP_MOVING:
             action = set_mario_action_moving(m, action, actionArg);

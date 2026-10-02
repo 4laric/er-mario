@@ -17,6 +17,7 @@ cpal = "0.15"
 ilhook = { version = "2.3.0", features = ["x64"] }
 windows = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Security",
     "Win32_System_LibraryLoader",
     "Win32_UI_Input_XboxController",
     "Win32_UI_Input_KeyboardAndMouse",

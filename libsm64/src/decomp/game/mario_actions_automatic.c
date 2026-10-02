@@ -1,4 +1,5 @@
 #include "../include/PR/ultratypes.h"
+#include "../../ap_capabilities.h"
 #include "../shim.h"
 
 #include "../include/sm64.h"
