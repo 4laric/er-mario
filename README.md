@@ -40,20 +40,22 @@ work through Steam Input, which Steam turns on for them by default.
 
 ## FLUDD (experimental AP fork builds)
 
-This fork includes an original FLUDD backpack with Hover, Rocket and Turbo nozzles.
-Set `fludd = on` in `er_mario.ini` to enable all three for standalone play. Archipelago
+This fork includes an original FLUDD backpack with Hover, Rocket, Turbo and Squirt nozzles.
+Set `fludd = on` in `er_mario.ini` to enable all four for standalone play. Archipelago
 controls FLUDD and its unlocks when connected; enable `mario_fludd` in your player YAML.
 These changes are development builds, not part of the upstream release linked above.
 
 Hold **RB** to use the selected nozzle. While holding RB, **D-pad Up** selects Hover,
-**Down** selects Rocket, **Right** selects Turbo, and **Left** cycles unlocked nozzles.
+**Down** selects Rocket, **Right** selects Turbo, and **Left** selects Squirt.
 On keyboard, hold **J** to use FLUDD and press **I** to cycle nozzles. Rocket and Turbo
 charge before firing; ordinary jump, attack and crouch inputs take priority.
 
 The HUD shows the selected nozzle and water remaining. Release FLUDD and stand still
 on the ground to refill gradually; resting at a grace or respawning refills the tank.
 AP tank upgrades increase capacity from 60 to 80, 100 and 120 without refilling water.
-Squirt is not included.
+Squirt sprays forward while ordinary movement continues; its short stream damages nearby
+targets and stops at map geometry. The current AP item pool unlocks the three traversal
+nozzles; Squirt is available in standalone play. Jets, charging and launches use SM64 audio.
 
 The backpack adds generated model parts. On the first start with this build, allow
 asset setup to finish, then restart when prompted, as during initial installation.
@@ -69,13 +71,21 @@ original movement implementations inspired by Odyssey and Sonic.
 to recall it; it also returns automatically. Land on the deployed cap while descending
 to bounce. One cap bounce is available per real landing on the ground. AP seeds unlock
 Cap Throw and Cap Bounce separately. The cap has eyes and leaves Mario's head when
-thrown. Enemy capture and cap damage are not included.
+thrown. Its swept hitbox damages each target once per throw. Enemy capture is not included.
 
 **Sonic movement:** hold **Left Stick Click** or **U** while grounded to charge Spin
 Dash, then release. Hold it in the air to charge Drop Dash for the next landing. Press
 **Right Stick Click** or **P** to Air Dash once per airtime; landing on the ground
 restores it. Cap bounces and FLUDD do not restore the aerial moves. AP seeds unlock
-the three moves separately. Homing attack is not included.
+the three moves separately. Charge and dash use a spinning animation and SM64 sounds.
+Only actual dash movement damages targets, once per target per burst; charging does not.
+Homing attack is not included.
+
+Addon damage follows ordinary Mario combat, including boss scaling, AP damage upgrades,
+enemy hit reactions and kill credit. Defaults are 20% for the cap, 3% per Squirt hit (at
+most once every 12 simulation ticks), and 34% for Sonic dashes, relative to a normal enemy's
+maximum HP. `damage_cap`, `damage_squirt` and `damage_sonic` in `er_mario.ini` override these
+percentages. Addon hits never initiate enemy or boss grabs.
 
 Menus, loss of focus, death and incompatible actions cancel addon input. The AP console
 captures these keyboard keys while typing. Ordinary Mario actions retain priority, and

@@ -473,25 +473,42 @@ impl HavokCollision {
         lines
     }
 
-    /// Current body -> world transform (position, rotation) of body `i` (raw reads; the body array was
-    /// validated by the last query).
-    pub fn transform(&self, i: u32) -> Option<(Vec3, Quat)> {
-        let i = i as usize;
-        if self.bodies == 0 || i >= self.body_count {
-            return None;
-        }
-        let body = self.bodies + i * 0xb0;
-        let q = Quat::from_xyzw(f32_at(body + 0x80), f32_at(body + 0x84), f32_at(body + 0x88), f32_at(body + 0x8c)).conjugate();
-        Some((vec3_at(body + 0x30), q))
+    /// Refresh the live body table before per-tick reads: streaming can reallocate it between queries.
+    pub fn refresh_bodies(&mut self) -> bool {
+        self.bodies = 0;
+        self.body_count = 0;
+        let Some(havok) = unsafe { CSHavokMan::instance() }.ok() else { return false };
+        let base = havok as *const CSHavokMan as usize;
+        let Some(world) = read_u64(base + 0x98).and_then(|pw| read_u64(pw as usize + 0x8)) else { return false };
+        let world = world as usize;
+        if !readable(world, 0x34) { return false; }
+        let Some(bodies) = read_u64(world + 0x28) else { return false };
+        let count = (u32_at(world + 0x30) as usize).min(262_144);
+        if !readable(bodies as usize, count * 0xb0) { return false; }
+        self.bodies = bodies as usize;
+        self.body_count = count;
+        true
     }
 
-    /// Shape address of body `i` (changes when the game reuses the slot for another body).
+    fn body(&self, i: u32) -> Option<usize> {
+        if self.bodies == 0 || i as usize >= self.body_count { return None; }
+        let body = self.bodies + i as usize * 0xb0;
+        if !readable(body, 0xb0) || u32_at(body + 0x78) == u32::MAX { return None; }
+        Some(body)
+    }
+
+    /// Current active body -> world transform.
+    pub fn transform(&self, i: u32) -> Option<(Vec3, Quat)> {
+        let body = self.body(i)?;
+        let q = Quat::from_xyzw(f32_at(body + 0x80), f32_at(body + 0x84), f32_at(body + 0x88), f32_at(body + 0x8c)).conjugate();
+        let p = vec3_at(body + 0x30);
+        let norm = q.length_squared();
+        (p.is_finite() && q.is_finite() && norm.is_finite() && norm > 0.5).then(|| (p, q.normalize()))
+    }
+
+    /// Shape address changes when the game reuses a slot; inactive bodies have no shape.
     pub fn shape_of(&self, i: u32) -> usize {
-        let i = i as usize;
-        if self.bodies == 0 || i >= self.body_count {
-            return 0;
-        }
-        unsafe { *((self.bodies + i * 0xb0 + 0x60) as *const usize) }
+        self.body(i).map_or(0, |body| unsafe { *((body + 0x60) as *const usize) })
     }
 
     /// Whether body `i` is a convex shape (box, hull, cylinder): its faces all point outwards.
@@ -506,11 +523,7 @@ impl HavokCollision {
 
     /// The decoded (cached) mesh of body `i`, if any.
     pub fn mesh_of(&self, i: u32) -> Option<Arc<Mesh>> {
-        let i = i as usize;
-        if self.bodies == 0 || i >= self.body_count {
-            return None;
-        }
-        let shape = unsafe { *((self.bodies + i * 0xb0 + 0x60) as *const usize) };
+        let shape = self.shape_of(i);
         if let Some((_, m)) = self.convex.get(&shape) {
             return m.clone();
         }
@@ -698,5 +711,41 @@ impl HavokCollision {
             out.truncate(MAX_TRIS);
         }
         Some(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tracked_body_reads_reject_removed_and_reused_slots() {
+        // Synthetic live body allocation, laid out just like the reader's 0xb0-byte record.
+        let mut words = vec![0u64; 0xb0 / 8];
+        let base = words.as_mut_ptr() as usize;
+        unsafe {
+            *((base + 0x60) as *mut usize) = 0x12340;
+            *((base + 0x8c) as *mut f32) = 1.0;
+        }
+        let h = HavokCollision { bodies: base, body_count: 1, ..Default::default() };
+        assert_eq!(h.shape_of(0), 0x12340);
+        assert!(h.transform(0).is_some());
+        assert_eq!(h.shape_of(1), 0);
+        assert!(h.transform(1).is_none());
+        unsafe { *((base + 0x78) as *mut u32) = u32::MAX; }
+        assert_eq!(h.shape_of(0), 0);
+        assert!(h.transform(0).is_none());
+        unsafe {
+            *((base + 0x78) as *mut u32) = 0;
+            *((base + 0x60) as *mut usize) = 0x56780;
+        }
+        assert_ne!(h.shape_of(0), 0x12340);
+        unsafe { *((base + 0x30) as *mut f32) = f32::NAN; }
+        assert!(h.transform(0).is_none());
+        unsafe {
+            *((base + 0x30) as *mut f32) = 0.0;
+            *((base + 0x8c) as *mut f32) = 0.0;
+        }
+        assert!(h.transform(0).is_none()); // never normalize an invalid/zero quaternion
     }
 }

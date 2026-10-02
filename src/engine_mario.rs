@@ -77,12 +77,22 @@ pub fn relative_parts(mats: &[f32], count: i32, mario: [f32; 3], eye_cell: u8, p
         (crate::assets::fludd::BODY, fludd.enabled),
         (crate::assets::fludd::HOVER, fludd.enabled && fludd.selected_nozzle == 1),
         (crate::assets::fludd::ROCKET, fludd.enabled && fludd.selected_nozzle == 2),
-        (crate::assets::fludd::TURBO, fludd.enabled && fludd.selected_nozzle == 4),
+        (crate::assets::fludd::TURBO, fludd.enabled && matches!(fludd.selected_nozzle, 4 | 8)),
         (crate::assets::fludd::JETS, fludd.enabled && fludd.active && fludd.selected_nozzle == 1),
         (crate::assets::fludd::ROCKET_JET, fludd.enabled && fludd.active && fludd.selected_nozzle == 2),
-        (crate::assets::fludd::TURBO_JET, fludd.enabled && fludd.active && fludd.selected_nozzle == 4),
+        (crate::assets::fludd::TURBO_JET, fludd.enabled && fludd.active && matches!(fludd.selected_nozzle, 4 | 8)),
     ] {
         out[part] = PartPose { scale: if shown { torso.scale } else { 0.001 }, ..torso };
+    }
+    // Squirt reuses the authored horizontal outlet/stream facing forward, avoiding extra
+    // skinned bones or a model rebuild. The torso's local -X is up and +Y is forward.
+    if fludd.selected_nozzle == 8 {
+        for part in [crate::assets::fludd::TURBO, crate::assets::fludd::TURBO_JET] {
+            out[part].rot = torso.rot * Quat::from_rotation_x(std::f32::consts::PI);
+        }
+        if fludd.enabled && fludd.active {
+            out[crate::assets::fludd::TURBO_JET] = squirt_stream_pose(torso);
+        }
     }
     let cappy = crate::ap_cappy::visual();
     let head = out[HEAD];
@@ -102,6 +112,32 @@ pub fn relative_parts(mats: &[f32], count: i32, mario: [f32; 3], eye_cell: u8, p
     Some(out)
 }
 
+fn squirt_stream_pose(torso: PartPose) -> PartPose {
+    let rot = torso.rot * Quat::from_rotation_x(std::f32::consts::PI);
+    let scale = torso.scale * crate::assets::fludd::SQUIRT_STREAM_SCALE;
+    let mouth = Vec3::from_array(crate::assets::fludd::STREAM_MOUTH);
+    PartPose { rot, scale, pos: torso.pos + rot * mouth * (torso.scale - scale) }
+}
+
+/// The damage beam uses the exact endpoints of the displayed nozzle stream.
+pub fn squirt_segment(parts: &[PartPose; PARTS], mario: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+    let jet = parts[crate::assets::fludd::TURBO_JET];
+    let to_sm = |local: [f32; 3]| {
+        let world = (jet.pos + jet.rot * Vec3::from_array(local) * jet.scale) / crate::SCALE;
+        [mario[0] - world.x, mario[1] + world.y, mario[2] + world.z]
+    };
+    (to_sm(crate::assets::fludd::STREAM_MOUTH), to_sm(crate::assets::fludd::STREAM_END))
+}
+
+/// Keep the water mesh on the nozzle while shortening it at a map obstruction.
+pub fn clip_squirt_stream(parts: &mut [PartPose; PARTS], fraction: f32) {
+    let jet = &mut parts[crate::assets::fludd::TURBO_JET];
+    let old = jet.scale;
+    let fraction = if fraction.is_finite() { fraction.clamp(0.0, 1.0) } else { 0.0 };
+    jet.scale = (old * fraction).max(0.001);
+    jet.pos += jet.rot * Vec3::from_array(crate::assets::fludd::STREAM_MOUTH) * (old - jet.scale);
+}
+
 pub fn blend(a: &[PartPose; PARTS], b: &[PartPose; PARTS], t: f32) -> [PartPose; PARTS] {
     let mut out = *b;
     for i in 0..PARTS {
@@ -111,6 +147,33 @@ pub fn blend(a: &[PartPose; PARTS], b: &[PartPose; PARTS], t: f32) -> [PartPose;
         }
     }
     out
+}
+
+#[cfg(test)]
+mod squirt_tests {
+    use super::*;
+    #[test]
+    fn enlarged_spray_keeps_its_mouth_at_the_nozzle_and_hitbox_at_the_visible_tip() {
+        for yaw in [0.0, 0.7, -1.4] {
+            let torso = PartPose { rot: Quat::from_rotation_y(yaw), pos: Vec3::new(0.1, 0.8, -0.2), scale: 1.0 };
+            let jet = squirt_stream_pose(torso);
+            let mouth = Vec3::from_array(crate::assets::fludd::STREAM_MOUTH);
+            let unchanged_mouth = torso.pos + jet.rot * mouth;
+            assert!((jet.pos + jet.rot * mouth * jet.scale - unchanged_mouth).length() < 1e-5);
+            let mut parts = [torso; PARTS];
+            parts[crate::assets::fludd::TURBO_JET] = jet;
+            let mario = [100.0, 200.0, -400.0];
+            let (start, end) = squirt_segment(&parts, mario);
+            assert!((Vec3::from_array(end).distance(Vec3::from_array(start)) - 124.0).abs() < 0.001);
+            let visible_tip = jet.pos + jet.rot * Vec3::from_array(crate::assets::fludd::STREAM_END) * jet.scale;
+            let world_tip = Vec3::new(-(end[0] - mario[0]), end[1] - mario[1], end[2] - mario[2]) * crate::SCALE;
+            assert!(world_tip.distance(visible_tip) < 1e-5);
+            clip_squirt_stream(&mut parts, 0.25);
+            let (clipped_start, clipped_end) = squirt_segment(&parts, mario);
+            assert!(Vec3::from_array(clipped_start).distance(Vec3::from_array(start)) < 0.001);
+            assert!((Vec3::from_array(clipped_end).distance(Vec3::from_array(clipped_start)) - 31.0).abs() < 0.001);
+        }
+    }
 }
 
 /// The pose to show this frame, in character space (set by the Mario frame, applied by `apply`).

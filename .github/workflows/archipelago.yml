@@ -71,6 +71,30 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./addons_physics_tests.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustc --edition=2024 --test src/collision_geometry.rs -o collision_geometry_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./collision_geometry_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustc --edition=2024 --test src/input_policy.rs -o input_policy_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./input_policy_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustc --edition=2024 --test src/addon_hitboxes.rs -o addon_hitboxes_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./addon_hitboxes_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustc --edition=2024 --test src/movement_guard.rs -o movement_guard_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./movement_guard_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustc --edition=2024 --test src/throw_collision.rs -o throw_collision_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./throw_collision_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          clang-cl /Gy /Ilibsm64/src /Ilibsm64/src/decomp/include /Ishim /DGBI_FLOATS /DVERSION_US tests/collision_platforms.c libsm64/src/load_surfaces.c libsm64/src/decomp/engine/surface_collision.c libsm64/src/decomp/game/platform_displacement.c libsm64/src/decomp/engine/math_util.c libsm64/src/decomp/engine/guMtxF2L.c /Fe:collision_platforms_tests.exe /link /OPT:REF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./collision_platforms_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --locked --release

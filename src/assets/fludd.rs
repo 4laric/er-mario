@@ -11,6 +11,10 @@ pub const TURBO: usize = 24;
 pub const JETS: usize = 25;
 pub const ROCKET_JET: usize = 26;
 pub const TURBO_JET: usize = 27;
+// Reuse the horizontal stream, reversed and enlarged about its mouth, for Squirt.
+pub const SQUIRT_STREAM_SCALE: f32 = 4.0;
+pub const STREAM_MOUTH: [f32; 3] = [-0.055, -0.37, 0.0];
+pub const STREAM_END: [f32; 3] = [-0.055, -0.68, 0.0];
 pub const COLORS: [[f32; 4]; 4] = [
     [0.95, 0.68, 0.08, 1.0],
     [0.30, 0.34, 0.40, 1.0],

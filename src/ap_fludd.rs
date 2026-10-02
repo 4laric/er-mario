@@ -5,6 +5,8 @@ pub const SUPPORTS_FLUDD: u32 = 32;
 pub const HOVER: u32 = 1;
 pub const ROCKET: u32 = 2;
 pub const TURBO: u32 = 4;
+pub const SQUIRT: u32 = 8;
+const NOZZLES: u64 = 15;
 const EXTERNAL: u64 = 1 << 63;
 static REQUESTED: AtomicU64 = AtomicU64::new(0);
 static APPLIED: AtomicU64 = AtomicU64::new(0);
@@ -19,7 +21,7 @@ pub struct FluddState {
     pub water_units: u32,
     pub capacity_units: u32,
 }
-/// Nozzle values are 0=none, 1=hover, 2=rocket, 4=turbo, matching the unlock mask.
+/// Nozzle values are 0=none, 1=hover, 2=rocket, 4=turbo, 8=squirt.
 #[derive(Clone, Copy)]
 pub struct Visual {
     pub enabled: bool,
@@ -35,7 +37,7 @@ fn decode(v: u64) -> Visual {
     Visual {
         enabled: v & 1 != 0,
         active: v & 2 != 0,
-        selected_nozzle: ((v >> 2) & 7) as u32,
+        selected_nozzle: ((v >> 2) & NOZZLES) as u32,
         water_units: ((v >> 8) & 255) as u32,
         capacity_units: ((v >> 16) & 255) as u32,
     }
@@ -50,7 +52,7 @@ fn requested() -> u64 {
         if crate::paths::config("fludd")
             .is_some_and(|s| matches!(s.to_ascii_lowercase().as_str(), "on" | "1" | "true" | "yes"))
         {
-            1 | (7 << 8)
+            1 | (NOZZLES << 8)
         } else {
             0
         }
@@ -62,7 +64,7 @@ pub fn apply() {
     unsafe {
         crate::sm64::sm64_er_fludd_configure(
             (r & 1) as u32,
-            ((r >> 8) & 7) as u32,
+            ((r >> 8) & NOZZLES) as u32,
             ((r >> 16) & 3) as u32,
         )
     };
@@ -75,9 +77,9 @@ pub fn publish() {
     unsafe { crate::sm64::sm64_er_fludd_get_state(s.as_mut_ptr()) };
     let r = APPLIED.load(Ordering::Acquire);
     VISUAL.store(
-        ((r >> 8) & 7) << 24
-            | ((r >> 16) & 3) << 27
-            | ((r >> 63) << 29)
+        ((r >> 8) & NOZZLES) << 24
+            | ((r >> 16) & 3) << 28
+            | ((r >> 63) << 30)
             | u64::from(s[0])
             | (u64::from(s[2] != 0) << 1)
             | (u64::from(s[1]) << 2)
@@ -89,7 +91,7 @@ pub fn publish() {
 #[unsafe(no_mangle)]
 pub extern "C" fn er_mario_ap_set_fludd(enabled: u32, nozzles: u32, tank_level: u32) -> u32 {
     if enabled > 1
-        || nozzles & !7 != 0
+        || u64::from(nozzles) & !NOZZLES != 0
         || tank_level > 3
         || (enabled == 0 && (nozzles != 0 || tank_level != 0))
     {
@@ -119,16 +121,16 @@ pub unsafe extern "C" fn er_mario_ap_get_fludd_state(out: *mut FluddState) -> u3
     let packed = VISUAL.load(Ordering::Acquire);
     let v = decode(packed);
     let same = (packed & 1) == (r & 1)
-        && ((packed >> 24) & 7) == ((r >> 8) & 7)
-        && ((packed >> 27) & 3) == ((r >> 16) & 3)
-        && ((packed >> 29) & 1) == (r >> 63);
+        && ((packed >> 24) & NOZZLES) == ((r >> 8) & NOZZLES)
+        && ((packed >> 28) & 3) == ((r >> 16) & 3)
+        && ((packed >> 30) & 1) == (r >> 63);
     unsafe {
         out.write(FluddState {
             abi_version: 1,
             flags: (base.flags & 1)
                 | (((r & 1) as u32) << 1)
                 | (u32::from(same && r == requested()) << 2),
-            unlocked_nozzles: ((r >> 8) & 7) as u32,
+            unlocked_nozzles: ((r >> 8) & NOZZLES) as u32,
             tank_level: ((r >> 16) & 3) as u32,
             selected_nozzle: v.selected_nozzle,
             water_units: v.water_units,

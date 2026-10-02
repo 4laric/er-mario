@@ -6,6 +6,7 @@
 #include "decomp/game/mario_step.h"
 #include "decomp/game/mario_actions_airborne.h"
 #include "decomp/engine/math_util.h"
+#include "play_sound.h"
 s32 lava_boost_on_wall(struct MarioState *m);
 static int safe_action(struct MarioState *m) {
     if (m->health < 0x100 || m->heldObj || m->hurtCounter || m->invincTimer > 0) return 0;
@@ -22,7 +23,16 @@ int er_fludd_step(struct MarioState *m) {
     int grounded = !(m->action & ACT_FLAG_AIR) && m->pos[1] <= m->floorHeight + 5;
     int safe = safe_action(m) && !(m->input & (INPUT_A_PRESSED | INPUT_B_PRESSED | INPUT_Z_PRESSED));
     int operation = er_fludd_policy(safe, grounded && m->forwardVel > -1 && m->forwardVel < 1);
+    /* Stock SM64 loops expire when requests stop. Do not keep a jet audible
+       after release, an empty tank, a refused action, or a menu suspension. */
+    f32 *sound_pos = m->marioObj ? m->marioObj->header.gfx.cameraToObject : m->pos;
+    if (operation == 1) play_sound(SOUND_AIR_BLOW_WIND, sound_pos);
+    else if (operation == 2) play_sound(SOUND_ACTION_FLYING_FAST, sound_pos);
+    else if (operation > 2) play_sound(SOUND_ENV_WATERFALL2, sound_pos);
     if (operation <= 1) return 0; /* native actions keep running during a charge */
+    /* Squirt spends one unit per active simulation tick, but never grants
+       lift, speed, fall protection, or a second movement/collision step. */
+    if (operation == 5) return 0;
     if (operation == 2) {
         set_mario_action(m, ACT_FREEFALL, 0); m->vel[1] = 110.0f; grounded = 0;
     } else if (operation == 3) {

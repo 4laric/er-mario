@@ -9,6 +9,10 @@ struct ERCappy {
 struct ERSonic {
     uint32_t enabled, mask, allowed, held, dash, previous_dash, needs_release;
     uint32_t spin_charge, drop_charge, pending_drop, rolling, rolling_unlock, dash_ticks, air_used;
+    /* Presentation only: no extra movement step or resource consumption. */
+    uint32_t feedback, feedback_ticks, feedback_request;
+    /* Completed collision step: Air Dash=4, rolling dash=8, charge=0. */
+    uint32_t attack_state, attack_generation;
 };
 extern struct ERCappy er_cappy;
 extern struct ERSonic er_sonic;

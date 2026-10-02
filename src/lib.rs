@@ -18,6 +18,11 @@ mod explore;
 mod gameover;
 mod hud;
 mod moving;
+mod input_policy;
+mod addon_hitboxes;
+mod collision_geometry;
+mod movement_guard;
+mod throw_collision;
 mod names;
 mod paths;
 mod sm64;
@@ -287,6 +292,7 @@ struct MarioState {
     /// Mario's body parts relative to him (this tick and the previous one), for the engine model
     parts: Option<[engine_mario::PartPose; engine_mario::PARTS]>,
     combat: combat::Combat,
+    addon_hits: addon_hitboxes::Hitboxes,
     /// the Tarnished died: Mario plays SM64's death until the game respawns the player
     dead: bool,
     /// lifts, doors and other moving collision as SM64 surface objects
@@ -753,7 +759,9 @@ fn havok_surfaces(h: &mut havok_col::HavokCollision, origin: [f32; 3], mario: [f
         crate::dlog(format!("  per body confirmed/picked: {}", rows.join(", ")));
     }
     if tris.is_empty() {
-        return None;
+        // A lift may be the only nearby geometry. Its surface object supplies the floor;
+        // raycast fallback here would recreate a stationary copy of the moving deck.
+        return (!h.exclude.is_empty()).then(Vec::new);
     }
     let mut out = Vec::with_capacity(tris.len());
     let m = glam::Vec3::from(mario);
@@ -778,37 +786,23 @@ fn havok_surfaces(h: &mut havok_col::HavokCollision, origin: [f32; 3], mario: [f
             log(format!("CSHavokMan at {:#x}", h as *const _ as usize));
         }
     }
-    for (t, layer, _) in &tris {
+    let mut centers = std::collections::HashMap::new();
+    for (t, layer, body) in &tris {
+        let mid = if h.is_convex(*body) || h.is_boxed(*body) {
+            *centers.entry(*body).or_insert_with(|| {
+                let mesh = h.mesh_of(*body)?;
+                let (p, q) = h.transform(*body)?;
+                let local = mesh.tris().iter().flatten().copied().sum::<glam::Vec3>() / (mesh.tris().len() * 3) as f32;
+                let world = q * local + p;
+                Some(collision::er_to_sm(origin, &HavokPosition(world.x, world.y, world.z, 0.0)))
+            })
+        } else { None };
         let v = t.map(|p| {
-            let s = collision::er_to_sm(origin, &HavokPosition(p.x, p.y, p.z, 0.0));
-            [s[0].round() as i32, s[1].round() as i32, s[2].round() as i32]
+            collision::er_to_sm(origin, &HavokPosition(p.x, p.y, p.z, 0.0)).map(|x| x.round() as i32)
         });
-        let f = |p: [i32; 3]| glam::Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32);
-        let (a, b, c) = (f(v[0]), f(v[1]), f(v[2]));
-        let n = (b - a).cross(c - b);
-        if n.length_squared() < 1.0 {
-            continue;
-        }
-        let n = n.normalize();
-        let centroid = (a + b + c) / 3.0;
-        // Havok collision is two-sided, SM64 surfaces are not: face each triangle the way Mario
-        // meets it. Flat below head height = floor (up), flat above = ceiling (down), else wall
-        // facing Mario.
-        // (a long ramp's centre can be far up the slope: judge it by its height where Mario is)
-        let want = if n.y.abs() > 0.2 {
-            let lo = a.y.min(b.y).min(c.y);
-            let hi = a.y.max(b.y).max(c.y);
-            let here = (a.y - (n.x * (m.x - a.x) + n.z * (m.z - a.z)) / n.y).clamp(lo, hi);
-            if here < m.y + 120.0 { glam::Vec3::Y } else { -glam::Vec3::Y }
-        } else {
-            let to_mario = m - centroid;
-            glam::Vec3::new(to_mario.x, 0.0, to_mario.z)
-        };
+        let Some(v) = collision_geometry::surface_vertices(v, mid) else { continue };
         let mut surf = sm64::SM64Surface::grass(v);
-        surf.force = *layer as i16; // unused by SM64 for default surfaces; used to colour debug lines
-        if n.dot(want) < 0.0 {
-            surf.vertices.swap(1, 2);
-        }
+        surf.force = *layer as i16;
         out.push(surf);
     }
     Some(out)
@@ -1015,6 +1009,7 @@ fn input_task() {
     }
     let menu = MENU_OPEN.load(Ordering::Relaxed);
     let (mut opener, mut pressed) = (false, false);
+    let mut right_trigger = 0;
     if let Some(p) = pad {
         let g = p.Gamepad;
         let b = g.wButtons;
@@ -1025,8 +1020,8 @@ fn input_task() {
             || b.contains(XINPUT_GAMEPAD_Y)
             || b.contains(XINPUT_GAMEPAD_LEFT_SHOULDER)
             || g.bLeftTrigger > 100
-            || g.bRightTrigger > 100
             || (menu && stick);
+        right_trigger = g.bRightTrigger;
         opener |= b.contains(XINPUT_GAMEPAD_START) || b.contains(XINPUT_GAMEPAD_BACK);
     }
     if kbd::focused() {
@@ -1046,15 +1041,16 @@ fn input_task() {
         MENU_OPEN.store(false, Ordering::Relaxed);
     }
     GAME_MENU.store(game_menu, Ordering::Relaxed);
+    let inferred_menu = input_policy::infer_menu(menu, routed, opener, pressed, right_trigger, ap_cappy::visual().enabled);
     if opener {
         if !menu {
             log("input: menu opened");
         }
         MENU_OPEN.store(true, Ordering::Relaxed);
-    } else if pressed && menu == routed {
+    } else if inferred_menu != menu {
         // in a menu the game stops feeding the character; in gameplay it always does
         log(format!("input: {}", if routed { "back in game" } else { "menu/popup" }));
-        MENU_OPEN.store(!routed, Ordering::Relaxed);
+        MENU_OPEN.store(inferred_menu, Ordering::Relaxed);
     }
     const ACTION: u64 = 1 << 4; // interact (doors, chests, graces, messages...)
     // research (debug): which action bits a press makes, to find what NPC dialogue listens to
@@ -1482,6 +1478,8 @@ fn frame(data: &FD4TaskData) {
                 explore::class_of(proxy2)
             ));
         }
+        let mut moving = moving::Moving::default();
+        moving.watch_query(&havok);
         MarioState {
             id,
             filter,
@@ -1504,8 +1502,9 @@ fn frame(data: &FD4TaskData) {
             last_query_havok: false,
             parts: None,
             combat: combat::Combat::new(),
+            addon_hits: addon_hitboxes::Hitboxes::new(),
             dead: false,
-            moving: Default::default(),
+            moving,
             stuck_ticks: 0,
             prev_parts: None,
         }
@@ -1643,6 +1642,7 @@ fn frame(data: &FD4TaskData) {
     };
     hud::set(wedges.min(ap_stats::max_wedges() as u8), hide_why, true);
     if (hide_why.is_some() || FOLLOWING.load(Ordering::Relaxed)) && (ap_fludd::visual().enabled || ap_cappy::visual().enabled || ap_sonic::visual().enabled) {
+        m.addon_hits.reset();
         worker::call("addon movement suspended", |_| { unsafe { sm64::sm64_er_fludd_input(0, 0, 0, 0); sm64::sm64_er_addons_input(0, 0, 0, 0); }; ap_fludd::publish(); });
     }
     // the tail swing: watch the bosses' stance, carry / throw / fly the grabbed one
@@ -1654,7 +1654,8 @@ fn frame(data: &FD4TaskData) {
             let h = havok?;
             let d = to - from;
             h.phys_world
-                .cast_ray(RAY_FILTER, &HavokPosition(from.x, from.y, from.z, 0.0), eldenring::position::PositionDelta(d.x, d.y, d.z), player_ref)
+                .cast_ray(PLAYER_MOVE_FILTER, &HavokPosition(from.x, from.y, from.z, 0.0), eldenring::position::PositionDelta(d.x, d.y, d.z), player_ref)
+                .or_else(|| h.phys_world.cast_ray(RAY_FILTER, &HavokPosition(from.x, from.y, from.z, 0.0), eldenring::position::PositionDelta(d.x, d.y, d.z), player_ref))
                 .map(|h| glam::Vec3::new(h.0, h.1, h.2))
         });
         if let Some((boss, pct)) = impact {
@@ -1778,6 +1779,7 @@ fn frame(data: &FD4TaskData) {
         if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() > 2.0 {
             log(format!("world origin shifted by {d:?}"));
             coins::shift(glam::Vec3::from(d));
+            m.havok.refresh_bodies();
             m.moving.rewatch(&m.havok);
             for i in 0..3 {
                 m.origin[i] += d[i];
@@ -1802,6 +1804,7 @@ fn frame(data: &FD4TaskData) {
     // following the Tarnished through a door, fog wall, grace or ladder: the follow mode steps SM64
     // itself (frame below). Stepping it here as well ran Mario at up to twice the speed there.
     let paused = paused || FOLLOWING.load(Ordering::Relaxed);
+    if paused { m.addon_hits.reset(); }
     if paused {
         if (ap_fludd::visual().enabled || ap_cappy::visual().enabled || ap_sonic::visual().enabled) && hide_why.is_none() && !FOLLOWING.load(Ordering::Relaxed) {
             worker::call("addon movement paused", |_| unsafe { sm64::sm64_er_fludd_input(0, 0, 0, 0); sm64::sm64_er_addons_input(0, 0, 0, 0); });
@@ -1845,7 +1848,7 @@ fn frame(data: &FD4TaskData) {
                 if g.wButtons.contains(XINPUT_GAMEPAD_DPAD_UP) { fludd_select = ap_fludd::HOVER; }
                 else if g.wButtons.contains(XINPUT_GAMEPAD_DPAD_DOWN) { fludd_select = ap_fludd::ROCKET; }
                 else if g.wButtons.contains(XINPUT_GAMEPAD_DPAD_RIGHT) { fludd_select = ap_fludd::TURBO; }
-                fludd_cycle = g.wButtons.contains(XINPUT_GAMEPAD_DPAD_LEFT);
+                else if g.wButtons.contains(XINPUT_GAMEPAD_DPAD_LEFT) { fludd_select = ap_fludd::SQUIRT; }
             }
             inputs.button_a = g.wButtons.contains(XINPUT_GAMEPAD_A) as u8;
             inputs.button_b = (g.wButtons.contains(XINPUT_GAMEPAD_X) || g.wButtons.contains(XINPUT_GAMEPAD_B)) as u8;
@@ -1892,8 +1895,12 @@ fn frame(data: &FD4TaskData) {
             }
         }
         m.ticks += 1;
+        let moving_changed = m.moving.update(&mut m.havok, m.origin, m.state.position);
+        if moving_changed {
+            m.last_query = None;
+        }
         let mut continue_tick = false;
-        if m.ticks % 3 == 0 {
+        if moving_changed || m.ticks % 3 == 0 {
             let caster = collision::Caster { filter: m.filter, origin: m.origin, player: player_ref };
             let t0 = std::time::Instant::now();
             // real collision only needs refreshing when Mario has moved a bit (or every 0.5 s)
@@ -1934,7 +1941,7 @@ fn frame(data: &FD4TaskData) {
             }
             if continue_tick {
                 // nothing to do: keep the loaded surfaces
-            } else if surfaces.is_empty() {
+            } else if surfaces.is_empty() && !from_havok {
                 m.no_ground += 1;
             } else {
                 m.no_ground = 0;
@@ -1954,9 +1961,6 @@ fn frame(data: &FD4TaskData) {
                 load_surfaces(&surfaces);
                 m.surfaces = surfaces;
             }
-        }
-        if m.moving.update(&mut m.havok, m.origin, m.state.position) {
-            m.last_query = None; // rebuild the static collision without (or with) the moving bodies
         }
         let id = m.id;
         // characters Mario could hit this tick, and whether the Tarnished just got hurt
@@ -2074,6 +2078,8 @@ fn frame(data: &FD4TaskData) {
             m.stuck_ticks = 0;
         }
         let stuck_at = m.state.position;
+        let guarded_target_pos = target_pos.clone();
+        let guarded_no_stomp = no_stomp.clone();
         let tt = std::time::Instant::now();
         let result = worker::call("tick", move |ctx| {
             if unstick {
@@ -2184,7 +2190,58 @@ fn frame(data: &FD4TaskData) {
         });
         PERF.lock().unwrap_or_else(|e| e.into_inner()).tick_ms += tt.elapsed().as_secs_f32() * 1000.0;
         match result {
-            Some((state, mesh, colors, normals, parts, hits)) => {
+            Some((mut state, mesh, colors, normals, mut parts, mut hits)) => {
+                let caster = collision::Caster { filter: PLAYER_MOVE_FILTER, origin: m.origin, player: player_ref };
+                let accepted = movement_guard::constrain(
+                    m.state.position, state.position,
+                    FOLLOWING.load(Ordering::Relaxed) || game_driven(current_anim(&player_ref.chr_ins)),
+                    |start, delta| caster.cast(start, delta),
+                );
+                if accepted != state.position {
+                    set_mario_position(m.id, accepted);
+                    state.position = accepted;
+                    hits = worker::call("guarded body hits", move |_| {
+                        if alive { combat::hits(id, &state, &guarded_target_pos, &guarded_no_stomp) } else { Vec::new() }
+                    }).unwrap_or_default();
+                }
+                if alive && fludd_allowed {
+                    let caster = collision::Caster { filter: m.filter, origin: m.origin, player: player_ref };
+                    let water = ap_fludd::visual();
+                    let squirt = parts.as_mut().filter(|_| water.enabled && water.active && water.selected_nozzle == ap_fludd::SQUIRT)
+                        .map(|parts| {
+                            let (start, end) = engine_mario::squirt_segment(parts, state.position);
+                            let delta = std::array::from_fn(|i| end[i] - start[i]);
+                            let clipped = caster.cast(start, delta).unwrap_or(end);
+                            let full = glam::Vec3::from_array(delta).length();
+                            let fraction = glam::Vec3::from_array(clipped).distance(glam::Vec3::from_array(start)) / full.max(0.001);
+                            engine_mario::clip_squirt_stream(parts, fraction);
+                            (start, clipped)
+                        });
+                    let cap = ap_cappy::visual();
+                    let sonic = ap_sonic::visual();
+                    let addon_targets: Vec<_> = targets.iter().enumerate().map(|(index, t)| addon_hitboxes::Target {
+                        key: t.key(), feet: t.sm, radius: t.radius, height: t.height, index,
+                    }).collect();
+                    let frame = addon_hitboxes::Frame {
+                        tick: m.ticks, mario_previous: m.state.position, mario_current: state.position,
+                        cap: (cap.enabled && cap.flying).then_some(cap.position),
+                        sonic_burst: (sonic.enabled && sonic.attack_state != 0).then_some(sonic.attack_generation), squirt,
+                    };
+                    let addon = m.addon_hits.step(frame, &addon_targets, |start, contact| {
+                        let delta = glam::Vec3::from_array(contact) - glam::Vec3::from_array(start);
+                        let distance = delta.length();
+                        distance <= 3.0 || caster.cast(start, (delta * ((distance - 3.0) / distance)).to_array()).is_none()
+                    });
+                    // Prefer the move's own damage over a simultaneous vanilla body hit.
+                    // Combat's shared cooldown still permits only one receipt per target.
+                    let mut addon_damage: Vec<_> = addon.into_iter().map(|(i, kind)| (i, match kind {
+                        addon_hitboxes::Kind::Cap => combat::Attack::Cap,
+                        addon_hitboxes::Kind::Squirt => combat::Attack::Squirt,
+                        addon_hitboxes::Kind::Sonic => combat::Attack::Sonic,
+                    }, false)).collect();
+                    addon_damage.append(&mut hits);
+                    hits = addon_damage;
+                } else { m.addon_hits.reset(); }
                 m.combat.deal(&player_ref.chr_ins, &targets, &hits, m.ticks);
                 m.prev_parts = m.parts.take();
                 m.parts = parts;
@@ -2227,6 +2284,7 @@ fn frame(data: &FD4TaskData) {
         // would drag Mario along ~40 m, since SM64 carries whoever stands on a platform)
         m.moving.clear(&mut m.havok);
         m.origin = [here.0, here.1, here.2];
+        m.addon_hits.reset();
         set_mario_position(m.id, [0.0, 0.0, 0.0]);
         m.state.position = [0.0, 0.0, 0.0];
         let caster = collision::Caster { filter: m.filter, origin: m.origin, player: player_ref };
@@ -2283,7 +2341,7 @@ fn frame(data: &FD4TaskData) {
             LAST_FREE_ANIM.store(cur, Ordering::Relaxed);
         }
         if let Some((t, before)) = *armed {
-            if cur != before {
+            if cur != before && game_driven(cur) {
                 log(format!("follow: interact started anim {cur} (was {before})"));
                 FOLLOW_STARTED.store(true, Ordering::Relaxed);
                 // no moving / dynamic collision (the fog wall itself) while the game walks him

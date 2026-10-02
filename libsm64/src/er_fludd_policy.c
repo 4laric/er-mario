@@ -2,7 +2,7 @@
 struct ERFludd er_fludd = {0,0,0,0,0,60,0,0,0,0,0,0,0,0};
 static uint32_t first(uint32_t mask) { return mask & (0u-mask); }
 void er_fludd_configure(uint32_t enabled, uint32_t mask, uint32_t level) {
-    if (enabled > 1 || (mask & ~7u) || level > 3 || (!enabled && (mask || level))) return;
+    if (enabled > 1 || (mask & ~15u) || level > 3 || (!enabled && (mask || level))) return;
     if (er_fludd.enabled == enabled && er_fludd.mask == mask && er_fludd.level == level) return;
     er_fludd.enabled = enabled; er_fludd.mask = mask; er_fludd.level = level;
     er_fludd.capacity = 60 + 20 * level;
@@ -22,10 +22,10 @@ void er_fludd_input(uint32_t allowed, uint32_t held, uint32_t select, uint32_t c
 int er_fludd_policy(int safe, int grounded) {
     uint32_t old = er_fludd.selected;
     if (er_fludd.allowed && er_fludd.enabled) {
-        if ((er_fludd.select == 1 || er_fludd.select == 2 || er_fludd.select == 4) && (er_fludd.mask & er_fludd.select)) er_fludd.selected = er_fludd.select;
+        if ((er_fludd.select == 1 || er_fludd.select == 2 || er_fludd.select == 4 || er_fludd.select == 8) && (er_fludd.mask & er_fludd.select)) er_fludd.selected = er_fludd.select;
         if (er_fludd.cycle && !er_fludd.previous_cycle) {
             uint32_t next = er_fludd.selected ? er_fludd.selected << 1 : 1;
-            for (int i=0;i<3;i++) { if (next>4) next=1; if (er_fludd.mask & next) break; next <<= 1; }
+            for (int i=0;i<4;i++) { if (next>8) next=1; if (er_fludd.mask & next) break; next <<= 1; }
             if (er_fludd.mask & next) er_fludd.selected = next;
         }
     }
@@ -48,5 +48,5 @@ int er_fludd_policy(int safe, int grounded) {
     if (er_fludd.selected == 4 && er_fludd.charge < 20) { er_fludd.charge++; if (er_fludd.charge < 20) return 1; }
     if (!er_fludd.water) { er_fludd.charge = 0; return 0; }
     er_fludd.water--; er_fludd.active = er_fludd.selected;
-    return er_fludd.selected == 1 ? 3 : 4;
+    return er_fludd.selected == 1 ? 3 : (er_fludd.selected == 8 ? 5 : 4);
 }

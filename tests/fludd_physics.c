@@ -5,6 +5,9 @@
 #include "decomp/game/mario.h"
 /* Engine seams are stubs; the production jet dispatcher and policy are real. */
 static int air_calls, ground_calls, collision;
+static int sound_calls;
+static u32 last_sound;
+void play_sound(uint32_t sound,f32 *pos) { assert(pos); sound_calls++; last_sound=sound; }
 u32 set_mario_action(struct MarioState *m,u32 action,u32 arg) { m->action=action; m->actionArg=arg; return 1; }
 void mario_set_forward_vel(struct MarioState *m,f32 speed) { m->forwardVel=speed; m->vel[0]=speed; }
 s16 set_mario_animation(struct MarioState *m,s32 id) { (void)m; (void)id; return 0; }
@@ -20,10 +23,11 @@ int main(void) {
     struct MarioState before=m;
     er_fludd_configure(0,0,0); er_fludd_input(1,1,0,0);
     assert(!er_fludd_step(&m) && !memcmp(&m,&before,sizeof m));
-    assert(!air_calls && !ground_calls); /* OFF parity: native state untouched */
+    assert(!air_calls && !ground_calls && !sound_calls); /* OFF parity: native state untouched */
     er_fludd_configure(1,7,0); er_fludd_reset(); er_fludd_input(1,1,1,0);
     assert(er_fludd_step(&m)==1 && air_calls==1 && ground_calls==0);
     assert(m.pos[1]==5 && m.vel[1]==1 && er_fludd.water==59);
+    assert(sound_calls==1 && last_sound==SOUND_ENV_WATERFALL2);
     er_fludd_after(&m); assert(m.peakHeight==m.floorHeight);
     /* Every refusal leaves movement to the existing native action dispatcher. */
     for (int reason=0;reason<6;reason++) {
@@ -34,17 +38,23 @@ int main(void) {
         if (reason==3) m.action=ACT_WATER_IDLE;
         if (reason==4) m.action=ACT_HOLDING_BOWSER;
         if (reason==5) m.input=INPUT_A_PRESSED;
-        before=m; unsigned water=er_fludd.water; int calls=air_calls+ground_calls;
+        before=m; unsigned water=er_fludd.water; int calls=air_calls+ground_calls, sounds=sound_calls;
         assert(!er_fludd_step(&m) && !memcmp(&m,&before,sizeof m));
         assert(er_fludd.water==water && air_calls+ground_calls==calls && !er_fludd.active);
+        assert(sound_calls==sounds);
         memset(&before,0,sizeof before); before.health=0x880; before.action=ACT_IDLE;
     }
     m=before; er_fludd_reset(); er_fludd_input(1,1,2,0);
-    for (int t=0;t<29;t++) assert(!er_fludd_step(&m));
+    int sounds=sound_calls;
+    for (int t=0;t<29;t++) { assert(!er_fludd_step(&m)); assert(last_sound==SOUND_AIR_BLOW_WIND); }
+    assert(sound_calls==sounds+29);
     assert(er_fludd_step(&m) && m.pos[1]==110 && m.vel[1]==106 && !er_fludd.water);
+    assert(last_sound==SOUND_ACTION_FLYING_FAST);
+    sounds=sound_calls; assert(!er_fludd_step(&m) && sound_calls==sounds); /* Empty tank is silent. */
     m=before; er_fludd_reset(); er_fludd_input(1,1,4,0);
-    for (int t=0;t<19;t++) assert(!er_fludd_step(&m));
+    for (int t=0;t<19;t++) { assert(!er_fludd_step(&m)); assert(last_sound==SOUND_AIR_BLOW_WIND); }
     assert(er_fludd_step(&m) && ground_calls==1 && m.pos[0]==15);
+    assert(last_sound==SOUND_ENV_WATERFALL2);
     for (int t=0;t<10;t++) assert(er_fludd_step(&m));
     assert(m.forwardVel==100);
     collision=GROUND_STEP_HIT_WALL;
@@ -55,6 +65,23 @@ int main(void) {
     collision=AIR_STEP_HIT_LAVA_WALL; m=before; er_fludd_reset(); er_fludd_input(1,1,1,0);
     assert(er_fludd_step(&m) && m.action==ACT_LAVA_BOOST);
     er_fludd_input(0,1,0,0); m=before;
+    sounds=sound_calls;
     assert(!er_fludd_step(&m) && !er_fludd.active); /* menu/follow suspension */
+    assert(sound_calls==sounds);
+    er_fludd_reset(); er_fludd_input(1,0,1,0); m=before;
+    assert(!er_fludd_step(&m) && sound_calls==sounds); /* Released trigger is silent. */
+    /* Squirt leaves native action, animation, velocity and collision dispatch
+       untouched, both on the ground and in flight. Its active state feeds the
+       rendering/hit seam, without granting the other nozzles' fall protection. */
+    er_fludd_configure(1,15,0); er_fludd_reset(); er_fludd_input(1,1,8,0);
+    for (int airborne=0;airborne<2;airborne++) {
+        m=before; if (airborne) { m.action=ACT_FREEFALL; m.pos[1]=100; m.vel[1]=-20; }
+        struct MarioState snapshot=m; int calls=air_calls+ground_calls;
+        sounds=sound_calls;
+        assert(!er_fludd_step(&m) && !memcmp(&m,&snapshot,sizeof m));
+        assert(air_calls+ground_calls==calls && !er_fludd.protected_fall);
+        assert(er_fludd.active==8 && er_fludd.water==59-airborne);
+        assert(sound_calls==sounds+1 && last_sound==SOUND_ENV_WATERFALL2);
+    }
     return 0;
 }
