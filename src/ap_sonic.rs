@@ -17,12 +17,16 @@ pub struct AddonState {
 pub struct Visual {
     pub enabled: bool,
     pub runtime_state: u32,
+    pub attack_state: u32,
+    pub attack_generation: u32,
 }
 static PUBLISHED: Mutex<(u64, Visual)> = Mutex::new((
     0,
     Visual {
         enabled: false,
         runtime_state: 0,
+        attack_state: 0,
+        attack_generation: 0,
     },
 ));
 pub fn visual() -> Visual {
@@ -57,9 +61,13 @@ pub fn apply() {
 pub fn publish() {
     let mut s = [0u32; 3];
     unsafe { crate::sm64::sm64_er_sonic_get_state(s.as_mut_ptr()) };
+    let mut attack = [0u32; 2];
+    unsafe { crate::sm64::sm64_er_sonic_get_attack_state(attack.as_mut_ptr()) };
     let v = Visual {
         enabled: s[0] != 0,
         runtime_state: s[2],
+        attack_state: attack[0],
+        attack_generation: attack[1],
     };
     let r = APPLIED.load(Ordering::Acquire);
     let identity = (r & EXTERNAL) | u64::from(s[0]) | (u64::from(s[1]) << 8);

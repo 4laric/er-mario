@@ -18,6 +18,8 @@ mod explore;
 mod gameover;
 mod hud;
 mod moving;
+mod input_policy;
+mod addon_hitboxes;
 mod collision_geometry;
 mod names;
 mod paths;
@@ -288,6 +290,7 @@ struct MarioState {
     /// Mario's body parts relative to him (this tick and the previous one), for the engine model
     parts: Option<[engine_mario::PartPose; engine_mario::PARTS]>,
     combat: combat::Combat,
+    addon_hits: addon_hitboxes::Hitboxes,
     /// the Tarnished died: Mario plays SM64's death until the game respawns the player
     dead: bool,
     /// lifts, doors and other moving collision as SM64 surface objects
@@ -1004,6 +1007,7 @@ fn input_task() {
     }
     let menu = MENU_OPEN.load(Ordering::Relaxed);
     let (mut opener, mut pressed) = (false, false);
+    let mut right_trigger = 0;
     if let Some(p) = pad {
         let g = p.Gamepad;
         let b = g.wButtons;
@@ -1014,8 +1018,8 @@ fn input_task() {
             || b.contains(XINPUT_GAMEPAD_Y)
             || b.contains(XINPUT_GAMEPAD_LEFT_SHOULDER)
             || g.bLeftTrigger > 100
-            || g.bRightTrigger > 100
             || (menu && stick);
+        right_trigger = g.bRightTrigger;
         opener |= b.contains(XINPUT_GAMEPAD_START) || b.contains(XINPUT_GAMEPAD_BACK);
     }
     if kbd::focused() {
@@ -1035,15 +1039,16 @@ fn input_task() {
         MENU_OPEN.store(false, Ordering::Relaxed);
     }
     GAME_MENU.store(game_menu, Ordering::Relaxed);
+    let inferred_menu = input_policy::infer_menu(menu, routed, opener, pressed, right_trigger, ap_cappy::visual().enabled);
     if opener {
         if !menu {
             log("input: menu opened");
         }
         MENU_OPEN.store(true, Ordering::Relaxed);
-    } else if pressed && menu == routed {
+    } else if inferred_menu != menu {
         // in a menu the game stops feeding the character; in gameplay it always does
         log(format!("input: {}", if routed { "back in game" } else { "menu/popup" }));
-        MENU_OPEN.store(!routed, Ordering::Relaxed);
+        MENU_OPEN.store(inferred_menu, Ordering::Relaxed);
     }
     const ACTION: u64 = 1 << 4; // interact (doors, chests, graces, messages...)
     // research (debug): which action bits a press makes, to find what NPC dialogue listens to
@@ -1495,6 +1500,7 @@ fn frame(data: &FD4TaskData) {
             last_query_havok: false,
             parts: None,
             combat: combat::Combat::new(),
+            addon_hits: addon_hitboxes::Hitboxes::new(),
             dead: false,
             moving,
             stuck_ticks: 0,
@@ -1634,6 +1640,7 @@ fn frame(data: &FD4TaskData) {
     };
     hud::set(wedges.min(ap_stats::max_wedges() as u8), hide_why, true);
     if (hide_why.is_some() || FOLLOWING.load(Ordering::Relaxed)) && (ap_fludd::visual().enabled || ap_cappy::visual().enabled || ap_sonic::visual().enabled) {
+        m.addon_hits.reset();
         worker::call("addon movement suspended", |_| { unsafe { sm64::sm64_er_fludd_input(0, 0, 0, 0); sm64::sm64_er_addons_input(0, 0, 0, 0); }; ap_fludd::publish(); });
     }
     // the tail swing: watch the bosses' stance, carry / throw / fly the grabbed one
@@ -1794,6 +1801,7 @@ fn frame(data: &FD4TaskData) {
     // following the Tarnished through a door, fog wall, grace or ladder: the follow mode steps SM64
     // itself (frame below). Stepping it here as well ran Mario at up to twice the speed there.
     let paused = paused || FOLLOWING.load(Ordering::Relaxed);
+    if paused { m.addon_hits.reset(); }
     if paused {
         if (ap_fludd::visual().enabled || ap_cappy::visual().enabled || ap_sonic::visual().enabled) && hide_why.is_none() && !FOLLOWING.load(Ordering::Relaxed) {
             worker::call("addon movement paused", |_| unsafe { sm64::sm64_er_fludd_input(0, 0, 0, 0); sm64::sm64_er_addons_input(0, 0, 0, 0); });
@@ -1837,7 +1845,7 @@ fn frame(data: &FD4TaskData) {
                 if g.wButtons.contains(XINPUT_GAMEPAD_DPAD_UP) { fludd_select = ap_fludd::HOVER; }
                 else if g.wButtons.contains(XINPUT_GAMEPAD_DPAD_DOWN) { fludd_select = ap_fludd::ROCKET; }
                 else if g.wButtons.contains(XINPUT_GAMEPAD_DPAD_RIGHT) { fludd_select = ap_fludd::TURBO; }
-                fludd_cycle = g.wButtons.contains(XINPUT_GAMEPAD_DPAD_LEFT);
+                else if g.wButtons.contains(XINPUT_GAMEPAD_DPAD_LEFT) { fludd_select = ap_fludd::SQUIRT; }
             }
             inputs.button_a = g.wButtons.contains(XINPUT_GAMEPAD_A) as u8;
             inputs.button_b = (g.wButtons.contains(XINPUT_GAMEPAD_X) || g.wButtons.contains(XINPUT_GAMEPAD_B)) as u8;
@@ -2177,7 +2185,45 @@ fn frame(data: &FD4TaskData) {
         });
         PERF.lock().unwrap_or_else(|e| e.into_inner()).tick_ms += tt.elapsed().as_secs_f32() * 1000.0;
         match result {
-            Some((state, mesh, colors, normals, parts, hits)) => {
+            Some((state, mesh, colors, normals, mut parts, mut hits)) => {
+                if alive && fludd_allowed {
+                    let caster = collision::Caster { filter: m.filter, origin: m.origin, player: player_ref };
+                    let water = ap_fludd::visual();
+                    let squirt = parts.as_mut().filter(|_| water.enabled && water.active && water.selected_nozzle == ap_fludd::SQUIRT)
+                        .map(|parts| {
+                            let (start, end) = engine_mario::squirt_segment(parts, state.position);
+                            let delta = std::array::from_fn(|i| end[i] - start[i]);
+                            let clipped = caster.cast(start, delta).unwrap_or(end);
+                            let full = glam::Vec3::from_array(delta).length();
+                            let fraction = glam::Vec3::from_array(clipped).distance(glam::Vec3::from_array(start)) / full.max(0.001);
+                            engine_mario::clip_squirt_stream(parts, fraction);
+                            (start, clipped)
+                        });
+                    let cap = ap_cappy::visual();
+                    let sonic = ap_sonic::visual();
+                    let addon_targets: Vec<_> = targets.iter().enumerate().map(|(index, t)| addon_hitboxes::Target {
+                        key: t.key(), feet: t.sm, radius: t.radius, height: t.height, index,
+                    }).collect();
+                    let frame = addon_hitboxes::Frame {
+                        tick: m.ticks, mario_previous: m.state.position, mario_current: state.position,
+                        cap: (cap.enabled && cap.flying).then_some(cap.position),
+                        sonic_burst: (sonic.enabled && sonic.attack_state != 0).then_some(sonic.attack_generation), squirt,
+                    };
+                    let addon = m.addon_hits.step(frame, &addon_targets, |start, contact| {
+                        let delta = glam::Vec3::from_array(contact) - glam::Vec3::from_array(start);
+                        let distance = delta.length();
+                        distance <= 3.0 || caster.cast(start, (delta * ((distance - 3.0) / distance)).to_array()).is_none()
+                    });
+                    // Prefer the move's own damage over a simultaneous vanilla body hit.
+                    // Combat's shared cooldown still permits only one receipt per target.
+                    let mut addon_damage: Vec<_> = addon.into_iter().map(|(i, kind)| (i, match kind {
+                        addon_hitboxes::Kind::Cap => combat::Attack::Cap,
+                        addon_hitboxes::Kind::Squirt => combat::Attack::Squirt,
+                        addon_hitboxes::Kind::Sonic => combat::Attack::Sonic,
+                    }, false)).collect();
+                    addon_damage.append(&mut hits);
+                    hits = addon_damage;
+                } else { m.addon_hits.reset(); }
                 m.combat.deal(&player_ref.chr_ins, &targets, &hits, m.ticks);
                 m.prev_parts = m.parts.take();
                 m.parts = parts;
@@ -2220,6 +2266,7 @@ fn frame(data: &FD4TaskData) {
         // would drag Mario along ~40 m, since SM64 carries whoever stands on a platform)
         m.moving.clear(&mut m.havok);
         m.origin = [here.0, here.1, here.2];
+        m.addon_hits.reset();
         set_mario_position(m.id, [0.0, 0.0, 0.0]);
         m.state.position = [0.0, 0.0, 0.0];
         let caster = collision::Caster { filter: m.filter, origin: m.origin, player: player_ref };

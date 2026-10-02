@@ -70,6 +70,10 @@ void sm64_er_sonic_get_state(uint32_t *out) {
     out[2]=(er_sonic.spin_charge ? 1 : 0) | (er_sonic.drop_charge ? 2 : 0)
         | (er_sonic.dash_ticks ? 4 : 0) | (er_sonic.rolling ? 8 : 0);
 }
+void sm64_er_sonic_get_attack_state(uint32_t *out) {
+    out[0] = er_sonic.attack_state;
+    out[1] = er_sonic.attack_generation;
+}
 void sm64_er_fludd_configure(uint32_t enabled, uint32_t mask, uint32_t level) { er_fludd_configure(enabled, mask, level); }
 void sm64_er_fludd_input(uint32_t allowed, uint32_t held, uint32_t select, uint32_t cycle) { er_fludd_input(allowed, held, select, cycle); }
 void sm64_er_fludd_refill(void) { er_fludd.water = er_fludd.enabled ? er_fludd.capacity : 0; }

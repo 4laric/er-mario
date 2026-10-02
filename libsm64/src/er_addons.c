@@ -3,6 +3,8 @@
 #include "er_fludd.h"
 #include "decomp/include/sm64.h"
 #include "decomp/include/mario_animation_ids.h"
+#include "decomp/include/audio_defines.h"
+#include "play_sound.h"
 #include "decomp/game/mario.h"
 #include "decomp/game/mario_step.h"
 #include "decomp/engine/surface_collision.h"
@@ -10,6 +12,10 @@
 #include <string.h>
 struct ERCappy er_cappy;
 struct ERSonic er_sonic;
+enum { SONIC_NONE, SONIC_CHARGE, SONIC_ROLL, SONIC_AIR_DASH };
+static struct AnimInfo sonic_animation;
+static int sonic_animation_saved;
+static int sonic_new_attack;
 s32 lava_boost_on_wall(struct MarioState *m);
 static int safe(struct MarioState *m) {
     if (m->health < 0x100 || m->heldObj || m->hurtCounter || m->invincTimer > 0) return 0;
@@ -26,6 +32,9 @@ static void cancel_cap(void) { er_cappy.phase = er_cappy.age = 0; }
 static void cancel_sonic(void) {
     er_sonic.spin_charge = er_sonic.drop_charge = er_sonic.pending_drop = 0;
     er_sonic.rolling = er_sonic.rolling_unlock = er_sonic.dash_ticks = 0;
+    er_sonic.feedback = er_sonic.feedback_ticks = er_sonic.feedback_request = 0;
+    sonic_animation_saved = 0;
+    er_sonic.attack_state = 0; sonic_new_attack = 0;
 }
 void er_cappy_configure(uint32_t enabled, uint32_t mask) {
     if (enabled == er_cappy.enabled && mask == er_cappy.mask) return;
@@ -38,9 +47,15 @@ void er_sonic_configure(uint32_t enabled, uint32_t mask) {
     er_sonic.enabled = enabled; er_sonic.mask = mask;
     if (!enabled) cancel_sonic();
     if (!(mask & 1)) er_sonic.spin_charge = 0;
-    if (!(mask & er_sonic.rolling_unlock)) er_sonic.rolling = er_sonic.rolling_unlock = 0;
+    if (!(mask & er_sonic.rolling_unlock)) {
+        er_sonic.rolling = er_sonic.rolling_unlock = 0;
+        if (er_sonic.attack_state == 8) er_sonic.attack_state = 0;
+    }
     if (!(mask & 2)) er_sonic.drop_charge = er_sonic.pending_drop = 0;
-    if (!(mask & 4)) er_sonic.dash_ticks = 0;
+    if (!(mask & 4)) {
+        er_sonic.dash_ticks = 0;
+        if (er_sonic.attack_state == 4) er_sonic.attack_state = 0;
+    }
 }
 void er_addons_reset(void) {
     cancel_cap(); cancel_sonic();
@@ -113,22 +128,34 @@ static void advance_cap(struct MarioState *m, int usable) {
     }
 }
 static int move(struct MarioState *m,int ground) {
-    set_mario_animation(m,ground ? MARIO_ANIM_RUNNING : MARIO_ANIM_GENERAL_FALL);
+    if (!er_sonic.feedback_request)
+        set_mario_animation(m,ground ? MARIO_ANIM_RUNNING : MARIO_ANIM_GENERAL_FALL);
     if (ground) {
-        set_mario_action(m,ACT_WALKING,0);
+        if (!er_sonic.feedback_request || m->action != ACT_WALKING) set_mario_action(m,ACT_WALKING,0);
         int r=perform_ground_step(m);
-        if(r==GROUND_STEP_LEFT_GROUND) set_mario_action(m,ACT_FREEFALL,0);
+        if(r==GROUND_STEP_LEFT_GROUND) { set_mario_action(m,ACT_FREEFALL,0); }
         else if(r==GROUND_STEP_HIT_WALL) { mario_set_forward_vel(m,0); cancel_sonic(); }
     } else {
-        set_mario_action(m,ACT_FREEFALL,0);
+        if (!er_sonic.feedback_request || m->action != ACT_FREEFALL) set_mario_action(m,ACT_FREEFALL,0);
         int r=perform_air_step(m,0);
         if(r==AIR_STEP_LANDED) { set_mario_action(m,ACT_FREEFALL_LAND,0); }
         else if(r==AIR_STEP_HIT_WALL) { mario_set_forward_vel(m,0); cancel_sonic(); }
         else if(r==AIR_STEP_HIT_LAVA_WALL) { lava_boost_on_wall(m); cancel_sonic(); }
     }
+    /* A blocked step cancels attack activity above. Generation changes only
+       when a new burst actually resolves a movement step, never during charge. */
+    if (er_sonic.attack_state && sonic_new_attack) {
+        if (++er_sonic.attack_generation == 0) ++er_sonic.attack_generation;
+    }
+    sonic_new_attack = 0;
     return 1;
 }
 int er_addons_step(struct MarioState *m) {
+    er_sonic.feedback_request = SONIC_NONE;
+    er_sonic.attack_state = 0; sonic_new_attack = 0;
+    sonic_animation_saved = er_sonic.feedback == SONIC_CHARGE && m->marioObj
+        && m->marioObj->header.gfx.animInfo.animID == MARIO_ANIM_FORWARD_SPINNING;
+    if (sonic_animation_saved) sonic_animation = m->marioObj->header.gfx.animInfo;
     int usable=safe(m) && !(m->input&(INPUT_A_PRESSED|INPUT_B_PRESSED|INPUT_Z_PRESSED));
     int air=(m->action&ACT_FLAG_AIR)!=0;
     if (!er_sonic.allowed || !usable) er_sonic.needs_release=1;
@@ -140,17 +167,19 @@ int er_addons_step(struct MarioState *m) {
     if(!usable) return 0; /* normal jump/punch/crouch and forced actions win */
     if(er_sonic.enabled && er_sonic.allowed) {
         if(air && (er_sonic.mask&4) && dash_edge && !er_sonic.air_used) {
-            er_sonic.air_used=1; er_sonic.dash_ticks=6;
+            er_sonic.air_used=1; er_sonic.dash_ticks=6; sonic_new_attack=1;
             if(m->intendedMag>0)m->faceAngle[1]=m->intendedYaw;
             if(m->vel[1]<4)m->vel[1]=4;
         }
         if(air && er_sonic.dash_ticks) {
             er_sonic.dash_ticks--; mario_set_forward_vel(m,80);
+            er_sonic.feedback_request = SONIC_AIR_DASH; er_sonic.attack_state=4;
             return move(m,0);
         }
         if(!air && er_sonic.pending_drop && (er_sonic.mask&2)) {
             mario_set_forward_vel(m,50+2*er_sonic.pending_drop);
-            er_sonic.pending_drop=0; er_sonic.rolling=14; er_sonic.rolling_unlock=2;
+            er_sonic.pending_drop=0; er_sonic.rolling=14; er_sonic.rolling_unlock=2; sonic_new_attack=1;
+            er_sonic.feedback_request = SONIC_ROLL; er_sonic.attack_state=8;
             return move(m,1);
         }
         if(air) {
@@ -161,19 +190,22 @@ int er_addons_step(struct MarioState *m) {
             er_sonic.drop_charge=0;
             if(er_sonic.rolling) {
                 er_sonic.rolling--; mario_set_forward_vel(m,m->forwardVel>2 ? m->forwardVel-2 : 0);
+                er_sonic.feedback_request = SONIC_ROLL; er_sonic.attack_state=8;
                 return move(m,1);
             }
             if(er_sonic.held && (er_sonic.mask&1)) {
                 if(er_sonic.spin_charge<30)er_sonic.spin_charge++;
                 if(m->intendedMag>0)m->faceAngle[1]=m->intendedYaw;
+                er_sonic.feedback_request = SONIC_CHARGE;
                 mario_set_forward_vel(m,0); return move(m,1);
             }
             if(er_sonic.spin_charge) {
                 uint32_t c=er_sonic.spin_charge; er_sonic.spin_charge=0;
-                if(c>=6) { mario_set_forward_vel(m,50+2*c); er_sonic.rolling=14; er_sonic.rolling_unlock=1; }
+                if(c>=6) { mario_set_forward_vel(m,50+2*c); er_sonic.rolling=14; er_sonic.rolling_unlock=1; sonic_new_attack=1; }
             }
             if(er_sonic.rolling) {
                 er_sonic.rolling--; mario_set_forward_vel(m,m->forwardVel>2 ? m->forwardVel-2 : 0);
+                er_sonic.feedback_request = SONIC_ROLL; er_sonic.attack_state=8;
                 return move(m,1);
             }
         }
@@ -191,6 +223,25 @@ int er_addons_step(struct MarioState *m) {
 }
 void er_addons_after(struct MarioState *m) {
     if(!safe(m)) { cancel_cap(); cancel_sonic(); }
+    uint32_t visual = er_sonic.feedback_request;
+    /* Drop charge does not own physics. Apply its pose after vanilla freefall
+       selects an animation, without changing action or consuming another step. */
+    if (!visual && er_sonic.enabled && er_sonic.allowed && (er_sonic.mask & 2)
+        && er_sonic.held && er_sonic.drop_charge && !er_fludd.active
+        && (m->action & ACT_FLAG_AIR) && safe(m)) visual = SONIC_CHARGE;
+    if (visual != er_sonic.feedback) er_sonic.feedback_ticks = 0;
+    er_sonic.feedback = visual;
+    if (!visual) return;
+    /* Native forward-spinning animation loops. Re-selecting the same ID leaves
+       its frame intact; the renderer advances it normally once per Mario tick. */
+    if (sonic_animation_saved && visual == SONIC_CHARGE)
+        m->marioObj->header.gfx.animInfo = sonic_animation;
+    set_mario_animation(m, MARIO_ANIM_FORWARD_SPINNING);
+    if (!er_sonic.feedback_ticks
+        || (visual != SONIC_AIR_DASH && er_sonic.feedback_ticks % 12 == 0))
+        play_sound(visual == SONIC_CHARGE ? SOUND_ACTION_TWIRL : SOUND_ACTION_SPIN,
+                   m->marioObj->header.gfx.cameraToObject);
+    er_sonic.feedback_ticks++;
 }
 
 /* The production caller and tests share ownership and visual cancellation.

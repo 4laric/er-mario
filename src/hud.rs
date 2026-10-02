@@ -483,7 +483,7 @@ impl ImguiRenderLoop for Overlay {
 
         let fludd = crate::ap_fludd::visual();
         if fludd.enabled {
-            let name = match fludd.selected_nozzle { 1 => "Hover", 2 => "Rocket", 4 => "Turbo", _ => "Locked" };
+            let name = match fludd.selected_nozzle { 1 => "Hover", 2 => "Rocket", 4 => "Turbo", 8 => "Squirt", _ => "Locked" };
             dl.add_text([size[0] * 0.5 + 50.0 * px, size[1] - 65.0 * px], [0.3, 0.85, 1.0, 1.0],
                 format!("FLUDD {name} {}/{}  RB / J", fludd.water_units, fludd.capacity_units));
         }

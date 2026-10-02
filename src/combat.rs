@@ -28,6 +28,9 @@ pub enum Attack {
     GroundPound,
     Stomp,
     Dash,
+    Cap,
+    Squirt,
+    Sonic,
 }
 
 impl Attack {
@@ -40,6 +43,9 @@ impl Attack {
             Attack::GroundPound => (68, 997, 350, 60.0, 3, 1.5),
             Attack::Stomp => (69, 998, 250, 35.0, 2, 0.8),
             Attack::Dash => (70, 999, 175, 25.0, 2, 0.8),
+            // Remote addon hits reuse the existing reaction rows; no new param slots.
+            Attack::Cap | Attack::Squirt => Attack::Punch.spec(),
+            Attack::Sonic => Attack::Dash.spec(),
         }
     }
 
@@ -52,6 +58,9 @@ impl Attack {
             Attack::Dash => (34.0, "damage_dive"),
             Attack::Stomp => (50.0, "damage_stomp"),
             Attack::GroundPound => (67.0, "damage_ground_pound"),
+            Attack::Cap => (20.0, "damage_cap"),
+            Attack::Squirt => (3.0, "damage_squirt"),
+            Attack::Sonic => (34.0, "damage_sonic"),
         }
     }
 
@@ -223,6 +232,8 @@ pub struct Target {
 }
 
 impl Target {
+    /// Stable handle identity for addon per-throw/dash hit tracking.
+    pub fn key(&self) -> u64 { self.key }
     /// A breakable prop (crate, barrel, clutter), not a character.
     pub fn is_prop(&self) -> bool {
         self.handle.is_none()
@@ -495,9 +506,11 @@ fn take_share(handle: &FieldInsHandle, attack: Attack) -> bool {
         crate::swing::add_stance(handle, match attack {
             Attack::GroundPound => crate::swing::STANCE_GROUND_POUND,
             Attack::Stomp => crate::swing::STANCE_STOMP,
-            Attack::Dash => crate::swing::STANCE_DIVE,
+            Attack::Dash | Attack::Sonic => crate::swing::STANCE_DIVE,
             Attack::Kick | Attack::Sweep => crate::swing::STANCE_KICK,
-            Attack::Punch => crate::swing::STANCE_PUNCH,
+            Attack::Punch | Attack::Cap => crate::swing::STANCE_PUNCH,
+            // A water stream chips HP without repeatedly breaking boss stance.
+            Attack::Squirt => 0.0,
         });
     }
     let data = &mut chr.modules.data;
@@ -514,7 +527,7 @@ const TARGET_RADIUS: f32 = 55.0;
 const TARGET_HEIGHT: f32 = 180.0;
 /// Mario's own hitbox radius in SM64 (units) plus a little reach.
 const MARIO_RADIUS: f32 = 45.0;
-/// A punch's reach beyond the target's body (SM64 units), within this cone (cos 50Â°) in front.
+/// A punch's reach beyond the target's body (SM64 units), within this cone (cos 50°) in front.
 const PUNCH_REACH: f32 = 80.0;
 const PUNCH_CONE_COS: f32 = 0.64;
 
@@ -601,7 +614,8 @@ impl Combat {
                 }
                 // a regular enemy punched or dived into from behind: Mario picks it up like a
                 // Bob-omb (carry.rs)
-                if (matches!(attack, Attack::Punch) || diving) && liftable(handle) {
+                let remote = matches!(attack, Attack::Cap | Attack::Squirt | Attack::Sonic);
+                if !remote && (matches!(attack, Attack::Punch) || diving) && liftable(handle) {
                     let me = player.modules.physics.position;
                     if crate::carry::try_pick_up(handle, glam::Vec3::new(me.0, me.1, me.2), target.radius / 100.0, target.height / 100.0) {
                         self.victims.insert(target.key, (*handle, tick));
@@ -609,7 +623,7 @@ impl Combat {
                     }
                 }
                 // a boss with a broken stance: this hit grabs him by the tail (swing.rs)
-                if crate::swing::try_grab(handle, target.radius / 100.0) {
+                if !remote && crate::swing::try_grab(handle, target.radius / 100.0) {
                     self.victims.insert(target.key, (*handle, tick));
                     continue;
                 }

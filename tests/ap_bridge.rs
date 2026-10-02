@@ -54,6 +54,9 @@ mod sm64 {
     pub fn sonic_dashing() {
         SONIC.lock().unwrap()[2] = 4;
     }
+    pub unsafe fn sm64_er_sonic_get_attack_state(out: *mut u32) {
+        unsafe { *out = SONIC.lock().unwrap()[2] & 12; *out.add(1) = 1; }
+    }
 
     use super::*;
     static FLUDD: std::sync::Mutex<[u32; 5]> = std::sync::Mutex::new([0, 0, 0, 0, 60]);
@@ -282,7 +285,7 @@ fn fludd_abi_is_additive_validated_and_worker_acknowledged() {
     };
     for args in [
         (2, 0, 0),
-        (1, 8, 0),
+        (1, 16, 0),
         (1, 7, 4),
         (0, 1, 0),
         (0, 0, 1),
@@ -290,7 +293,8 @@ fn fludd_abi_is_additive_validated_and_worker_acknowledged() {
     ] {
         assert_eq!(er_mario_ap_set_fludd(args.0, args.1, args.2), 0);
     }
-    for mask in 0..=7 {
+    assert_eq!(ap_fludd::SQUIRT, 8);
+    for mask in 0..=15 {
         for tier in 0..=3 {
             assert_eq!(er_mario_ap_set_fludd(1, mask, tier), 1);
             unsafe { er_mario_ap_get_fludd_state(&mut s) };
@@ -391,6 +395,8 @@ fn cappy_and_sonic_additive_abi_are_worker_acknowledged_without_resetting_runtim
     unsafe { ap_sonic::er_mario_ap_get_sonic_state(&mut s) };
     assert_eq!(s.runtime_state, 4);
     assert_eq!(ap_sonic::visual().runtime_state, 4);
+    assert_eq!(ap_sonic::visual().attack_state, 4);
+    assert_eq!(ap_sonic::visual().attack_generation, 1);
     ap_capabilities::set_live_instance(false);
     unsafe {
         ap_cappy::er_mario_ap_get_cappy_state(&mut c);

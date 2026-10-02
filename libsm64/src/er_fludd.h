@@ -10,7 +10,10 @@ extern struct ERFludd er_fludd;
 void er_fludd_configure(uint32_t enabled, uint32_t mask, uint32_t level);
 void er_fludd_reset(void);
 void er_fludd_input(uint32_t allowed, uint32_t held, uint32_t select, uint32_t cycle);
-/* Pure policy shared by native integration and standalone regression tests. */
+/* Pure policy shared by native integration and standalone regression tests.
+   Nozzle mask: Hover 1, Rocket 2, Turbo 4, Squirt 8.
+   Operations: inactive 0, charging 1, rocket 2, hover 3, turbo 4,
+   squirt 5 (native locomotion retains ownership). */
 int er_fludd_policy(int safe, int grounded);
 void er_fludd_after(struct MarioState *m);
 int er_fludd_step(struct MarioState *m);

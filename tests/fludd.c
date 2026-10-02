@@ -56,5 +56,25 @@ int main(void) {
         for (unsigned t=0;t<200;t++) { er_fludd_policy(1,1); assert(er_fludd.water<=er_fludd.capacity); }
         assert(er_fludd.water==60+20*level);
     }
+    /* Squirt coexists with the three legacy nozzles and has no charge delay. */
+    er_fludd_configure(1,15,0); er_fludd_reset(); er_fludd_input(1,1,8,0);
+    for (int t=0;t<60;t++) {
+        assert(er_fludd_policy(1,0)==5);
+        assert(er_fludd.selected==8 && er_fludd.active==8 && !er_fludd.charge);
+    }
+    assert(!er_fludd.water && er_fludd_policy(1,0)==0 && !er_fludd.active);
+    er_fludd_reset(); er_fludd_input(1,0,8,0); er_fludd_policy(1,1);
+    er_fludd_input(1,0,0,1); er_fludd_policy(1,1); assert(er_fludd.selected==1);
+    er_fludd_policy(1,1); assert(er_fludd.selected==1);
+    for (unsigned expected=2;expected<=8;expected<<=1) {
+        er_fludd_input(1,0,0,0); er_fludd_policy(1,1);
+        er_fludd_input(1,0,0,1); er_fludd_policy(1,1); assert(er_fludd.selected==expected);
+    }
+    /* Legacy AP masks cannot select or cycle to Squirt. Revocation relocks it. */
+    er_fludd_configure(1,7,0); assert(er_fludd.selected==1);
+    er_fludd_input(1,1,8,0); assert(er_fludd_policy(1,0)==3 && er_fludd.selected==1);
+    er_fludd_configure(1,8,0); er_fludd_reset(); er_fludd_input(1,1,8,0);
+    assert(er_fludd_policy(0,1)==0 && er_fludd.water==60 && !er_fludd.active);
+    er_fludd_input(0,1,8,0); assert(er_fludd_policy(1,1)==0 && er_fludd.water==60);
     return 0;
 }
