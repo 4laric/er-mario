@@ -21,6 +21,7 @@ mod moving;
 mod names;
 mod paths;
 mod sm64;
+mod ap_capabilities;
 mod swing;
 mod stats;
 mod version;

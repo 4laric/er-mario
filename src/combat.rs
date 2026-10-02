@@ -523,6 +523,10 @@ const PUNCH_CONE_COS: f32 = 0.64;
 const MAX_STOMPS: u32 = 1;
 
 pub fn hits(id: i32, state: &sm64::SM64MarioState, targets: &[([f32; 3], f32, f32, usize)], no_stomp: &[usize]) -> Vec<(usize, Attack, bool)> {
+    // Check before libsm64's attack query: it can bounce Mario as a side effect.
+    if unsafe { sm64::sm64_er_ap_attack_allowed(state.action) } == 0 {
+        return Vec::new();
+    }
     // diving (SM64's dive or its belly slide): kept with each hit, a dive into an enemy's back
     // picks it up like diving into a Bob-omb
     const ACT_FLAG_DIVING: u32 = 0x0008_0000;

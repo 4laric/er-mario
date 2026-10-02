@@ -3,6 +3,7 @@
 #endif
 
 #include "libsm64.h"
+#include "ap_capabilities.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -230,6 +231,15 @@ SM64_LIB_FN void sm64_mario_tick( int32_t marioId, const struct SM64MarioInputs 
 
     global_state_bind( ((struct MarioInstance *)s_mario_instance_pool.objects[ marioId ])->globalState );
 
+    // A seed change can revoke an ability while its action is in progress.
+    // Cancel without giving a new jump, and release any carried object safely.
+    int release = !er_ap_allows(32) && gMarioState->heldObj != NULL
+        && er_ap_action_capability(gMarioState->action) != 64;
+    if (release || er_ap_filter_action(gMarioState->action, gMarioState->action) != gMarioState->action) {
+        gMarioState->heldObj = NULL;
+        gMarioState->usedObj = NULL;
+        set_mario_action(gMarioState, (gMarioState->action & ACT_FLAG_AIR) ? ACT_FREEFALL : ACT_IDLE, 0);
+    }
     update_button( inputs->buttonA, A_BUTTON );
     update_button( inputs->buttonB, B_BUTTON );
     update_button( inputs->buttonZ, Z_TRIG );
@@ -765,6 +775,7 @@ static struct MarioState *er_bind(int32_t marioId)
 
 SM64_LIB_FN void sm64_er_pick_up(int32_t marioId)
 {
+    if (!er_ap_allows(32)) return;
     struct MarioState *m = er_bind(marioId);
     if (!m) return;
     memset(&er_held_stand_in, 0, sizeof(er_held_stand_in));
