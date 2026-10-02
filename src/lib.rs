@@ -1469,6 +1469,8 @@ fn frame(data: &FD4TaskData) {
                 explore::class_of(proxy2)
             ));
         }
+        let mut moving = moving::Moving::default();
+        moving.watch_query(&havok);
         MarioState {
             id,
             filter,
@@ -1492,7 +1494,7 @@ fn frame(data: &FD4TaskData) {
             parts: None,
             combat: combat::Combat::new(),
             dead: false,
-            moving: Default::default(),
+            moving,
             stuck_ticks: 0,
             prev_parts: None,
         }
@@ -1765,6 +1767,7 @@ fn frame(data: &FD4TaskData) {
         if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() > 2.0 {
             log(format!("world origin shifted by {d:?}"));
             coins::shift(glam::Vec3::from(d));
+            m.havok.refresh_bodies();
             m.moving.rewatch(&m.havok);
             for i in 0..3 {
                 m.origin[i] += d[i];
