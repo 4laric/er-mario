@@ -92,8 +92,9 @@ impl Tracker {
             .flatten();
         if self.drink_anim.is_some_and(|a| a != anim) {
             self.drink_anim = None;
-            self.remaining = 0.0;
-            self.queued = None;
+            // ER can transition between startup, drinking and recovery before
+            // the inventory decrement reaches our frame observer. An animation
+            // change ends the pose, not proof of the pending native consumption.
         }
         self.remaining = (self.remaining - dt.clamp(0.0, 0.25)).max(0.0);
         self.elapsed += dt.clamp(0.0, 0.25);
@@ -108,12 +109,25 @@ impl Tracker {
         self.drink_anim
             .map(|_| (self.elapsed / 1.8).clamp(0.0, 1.0))
     }
+
+    pub fn pending(&self) -> bool {
+        self.remaining > 0.0
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     const RED: u32 = 0x4000_03e9;
+    #[test]
+    fn animation_transition_before_inventory_update_keeps_consumption_request() {
+        let mut t = Tracker::default();
+        t.observe(sample(3), None, None, 0, 0.0);
+        t.observe(sample(3), Some(0), Some(RED), 50, 0.1);
+        t.observe(sample(3), None, None, 51, 0.1);
+        assert_eq!(t.observe(sample(2), None, None, 51, 0.1), Some(RED));
+        assert_eq!(t.observe(sample(2), None, None, 0, 0.1), None);
+    }
     fn sample(total: u32) -> Option<Snapshot> {
         Some(Snapshot {
             player: 1,

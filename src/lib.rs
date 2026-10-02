@@ -1694,7 +1694,21 @@ fn frame(data: &FD4TaskData) {
     let request = FLASK_REQUEST_ANIM.swap(-1, Ordering::Relaxed);
     let sample = flask_ready.then(flask::snapshot).flatten();
     if let Some(sample) = sample { hud::set_flask(sample.total, sample.allocation); }
-    let consumed = m.flask.observe(sample, (request != -1).then_some(request), flask::queued(player_ref), current_anim(&player_ref.chr_ins), data.delta_time.time);
+    let queued = flask::queued(player_ref);
+    let anim = current_anim(&player_ref.chr_ins);
+    let pending = m.flask.pending();
+    let consumed = m.flask.observe(sample, (request != -1).then_some(request), queued, anim, data.delta_time.time);
+    // Capture only state changes during a drink, so live failures distinguish
+    // native consumption, animation transitions and an unsafe-state reset.
+    if request != -1 || pending || m.flask.pending() {
+        static LAST: Mutex<Option<(bool, Option<(u32, u16)>, Option<u32>, i32)>> = Mutex::new(None);
+        let state = (flask_ready, sample.map(|s| (s.total, s.tiers)), queued, anim);
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        if request != -1 || *last != Some(state) || (pending && !m.flask.pending()) {
+            log(format!("flask: observe ready={} charges={:?} queued={queued:?} anim={anim} request={request} pending={} Mario={:#x} native HP={}/{}", flask_ready, state.1, m.flask.pending(), m.state.action, player_ref.chr_ins.modules.data.hp, player_ref.chr_ins.modules.data.max_hp));
+            *last = Some(state);
+        }
+    }
     if let Some(item) = consumed {
         let heal = flask::healing(player_ref, item);
         m.flask_heal = m.flask_heal.saturating_add(heal);
