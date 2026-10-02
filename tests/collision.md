@@ -15,6 +15,18 @@ All fixtures are synthetic and require no game assets, ROM or running game.
 
 The Windows workflow compiles and executes these tests before building the release DLL.
 
+## Adjacent wooden stakes (combined playtest report, 2026-10-02)
+
+The user became trapped among wooden stakes after a regular jump; an enemy hit freed Mario.
+The screenshot does not establish which live triangles were involved. A production collision
+query regression reproduces a relevant defect: both triangles on a shared edge use the original
+probe position, applying the same wall push twice and crossing the opposite obstacle.
+Each face now uses the position corrected by the preceding face. The synthetic 70-unit gap
+checks both entry sides, all 24 face orders, repeated collision queries and surface refreshes.
+The test fails before the change and passes afterward; the earlier rock/elevator checks also
+pass. This is a prevention change to the wall solver, not an automatic unstuck adjustment.
+Replaying the reported regular jump in-game remains necessary to confirm this incident is fixed.
+
 ## In-game validation still required
 
 The reported rock location was unspecified. No Elden Ring session was launched during this
