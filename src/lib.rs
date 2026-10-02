@@ -21,6 +21,7 @@ mod moving;
 mod input_policy;
 mod addon_hitboxes;
 mod collision_geometry;
+mod movement_guard;
 mod names;
 mod paths;
 mod sm64;
@@ -2075,6 +2076,8 @@ fn frame(data: &FD4TaskData) {
             m.stuck_ticks = 0;
         }
         let stuck_at = m.state.position;
+        let guarded_target_pos = target_pos.clone();
+        let guarded_no_stomp = no_stomp.clone();
         let tt = std::time::Instant::now();
         let result = worker::call("tick", move |ctx| {
             if unstick {
@@ -2185,7 +2188,20 @@ fn frame(data: &FD4TaskData) {
         });
         PERF.lock().unwrap_or_else(|e| e.into_inner()).tick_ms += tt.elapsed().as_secs_f32() * 1000.0;
         match result {
-            Some((state, mesh, colors, normals, mut parts, mut hits)) => {
+            Some((mut state, mesh, colors, normals, mut parts, mut hits)) => {
+                let caster = collision::Caster { filter: PLAYER_MOVE_FILTER, origin: m.origin, player: player_ref };
+                let accepted = movement_guard::constrain(
+                    m.state.position, state.position,
+                    FOLLOWING.load(Ordering::Relaxed) || game_driven(current_anim(&player_ref.chr_ins)),
+                    |start, delta| caster.cast(start, delta),
+                );
+                if accepted != state.position {
+                    set_mario_position(m.id, accepted);
+                    state.position = accepted;
+                    hits = worker::call("guarded body hits", move |_| {
+                        if alive { combat::hits(id, &state, &guarded_target_pos, &guarded_no_stomp) } else { Vec::new() }
+                    }).unwrap_or_default();
+                }
                 if alive && fludd_allowed {
                     let caster = collision::Caster { filter: m.filter, origin: m.origin, player: player_ref };
                     let water = ap_fludd::visual();
@@ -2323,7 +2339,7 @@ fn frame(data: &FD4TaskData) {
             LAST_FREE_ANIM.store(cur, Ordering::Relaxed);
         }
         if let Some((t, before)) = *armed {
-            if cur != before {
+            if cur != before && game_driven(cur) {
                 log(format!("follow: interact started anim {cur} (was {before})"));
                 FOLLOW_STARTED.store(true, Ordering::Relaxed);
                 // no moving / dynamic collision (the fog wall itself) while the game walks him
