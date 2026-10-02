@@ -24,6 +24,7 @@ mod paths;
 mod sm64;
 mod swing;
 mod stats;
+mod update;
 mod version;
 mod voice;
 mod worker;
@@ -552,6 +553,7 @@ fn init_sm64(export: bool) -> Option<Option<assets::model::MarioModel>> {
 fn startup() {
     let build = assets::check();
     log(format!("mod folder {}", paths::mod_dir().display()));
+    update::start();
     if build {
         hud::setup_progress("Setting up ER Mario", 0.0, "Reading the ROM");
     }

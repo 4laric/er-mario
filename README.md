@@ -70,6 +70,9 @@ to blank it out.
   and saves keep working.
 - The `libsm64` folder is libsm64 with a few patches for the mod (ladder climbing, carrying,
   dive grabs, head turning, model part export), compiled into the DLL.
+- Once per launch the mod asks GitHub for the latest release's version, and the title screen says
+  when there's a newer one. Nothing is downloaded or installed automatically. `update_check = off`
+  in er_mario.ini turns the check off.
 
 ## Building
 

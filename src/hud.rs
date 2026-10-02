@@ -402,22 +402,30 @@ impl ImguiRenderLoop for Overlay {
         // built and loaded this session (not during the first-launch setup)
         if !crate::in_world() && crate::assets::ready() {
             let g = 10.0 * size[1] / 240.0 * SIZE;
-            let (mut x, y) = (size[1] * 0.04, size[1] * 0.96 - g);
-            for c in concat!("ER MARIO ", env!("CARGO_PKG_VERSION")).chars() {
-                match c {
-                    ' ' => x += g * 0.5,
-                    '.' => {
-                        let d = g * 0.18;
-                        dl.add_rect([x, y + g - d * 1.6], [x + d, y + g - d * 0.6], [1.0, 1.0, 1.0, 1.0]).filled(true).build();
-                        x += g * 0.35;
-                    }
-                    c => {
-                        if let Some(id) = glyph_for(c) {
-                            image(id, x, y, g, g);
+            let text = |text: &str, y: f32, g: f32| {
+                let mut x = size[1] * 0.04;
+                for c in text.chars() {
+                    match c {
+                        ' ' => x += g * 0.5,
+                        '.' => {
+                            let d = g * 0.18;
+                            dl.add_rect([x, y + g - d * 1.6], [x + d, y + g - d * 0.6], [1.0, 1.0, 1.0, 1.0]).filled(true).build();
+                            x += g * 0.35;
                         }
-                        x += g * 0.8;
+                        c => {
+                            if let Some(id) = glyph_for(c) {
+                                image(id, x, y, g, g);
+                            }
+                            x += g * 0.8;
+                        }
                     }
                 }
+            };
+            let y = size[1] * 0.96 - g;
+            text(concat!("ER MARIO ", env!("CARGO_PKG_VERSION")), y, g);
+            // smaller, right above the version
+            if let Some(v) = crate::update::newer() {
+                text(&format!("UPDATE AVAILABLE {v}"), y - g * 1.1, g * 0.75);
             }
         }
 
