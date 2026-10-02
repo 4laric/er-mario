@@ -892,6 +892,9 @@ fn pose_task_late() {
     // (and never for long: after 5 s without Mario the Tarnished shows again)
     static WAITING_SINCE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
     let no_pose = engine_mario::POSE.lock().unwrap_or_else(|e| e.into_inner()).is_none();
+    if no_pose {
+        ap_capabilities::set_live_instance(false);
+    }
     let too_long = {
         let mut w = WAITING_SINCE.lock().unwrap_or_else(|e| e.into_inner());
         if !no_pose {
@@ -1209,6 +1212,7 @@ fn frame(data: &FD4TaskData) {
     }
 
     let Some(player) = (unsafe { WorldChrMan::instance_mut() }).ok().and_then(|w| w.main_player.as_mut()) else {
+        ap_capabilities::set_live_instance(false);
         IN_WORLD.store(false, Ordering::Relaxed);
         return;
     };
@@ -1246,6 +1250,7 @@ fn frame(data: &FD4TaskData) {
     }
     // without Mario's model files (first launch builds them) Mario mode stays off
     if ENABLED.load(Ordering::Relaxed) && !assets::ready() {
+        ap_capabilities::set_live_instance(false);
         ENABLED.store(false, Ordering::Relaxed);
         static TOLD: AtomicBool = AtomicBool::new(false);
         if !TOLD.swap(true, Ordering::Relaxed) {
@@ -1313,9 +1318,11 @@ fn frame(data: &FD4TaskData) {
 
     let mut guard = MARIO.lock().unwrap_or_else(|e| e.into_inner());
     if worker::hung() {
+        ap_capabilities::set_live_instance(false);
         ENABLED.store(false, Ordering::Relaxed);
     }
     if !ENABLED.load(Ordering::Relaxed) {
+        ap_capabilities::set_live_instance(false);
         if gameover::ACTIVE.swap(false, Ordering::Relaxed) {
             gameover::reset();
         }
@@ -1353,6 +1360,7 @@ fn frame(data: &FD4TaskData) {
     }
 
     if !SM64_READY.load(Ordering::Relaxed) && init_sm64(false).is_none() {
+        ap_capabilities::set_live_instance(false);
         ENABLED.store(false, Ordering::Relaxed);
         return;
     }
@@ -1364,6 +1372,7 @@ fn frame(data: &FD4TaskData) {
     // floor there may still be loading while something lower (a cave, the terrain under a
     // building) already is, and Mario would be put on that, under the floor
     if guard.is_none() {
+        ap_capabilities::set_live_instance(false);
         let p = physics.position;
         let ground = unsafe { eldenring::cs::CSHavokMan::instance() }.ok().and_then(|h| {
             h.phys_world.cast_ray(RAY_FILTER, &HavokPosition(p.0, p.1 + 1.0, p.2, 0.0), eldenring::position::PositionDelta(0.0, -4.0, 0.0), player_ref)
@@ -1486,6 +1495,7 @@ fn frame(data: &FD4TaskData) {
         }
     });
     if m.id < 0 {
+        ap_capabilities::set_live_instance(false);
         // libsm64 only creates Mario on a floor: right after a load the collision may not be there
         // yet. Drop this attempt and retry shortly (instead of staying broken with the last pose).
         log("mario creation failed (no floor yet), retrying in 1 s");
@@ -1600,6 +1610,9 @@ fn frame(data: &FD4TaskData) {
     let wedges = if m.dead { 0 } else { (m.state.health.max(0) >> 8) as u8 };
     // (no HUD on the loading screen: the Tarnished has no animation yet while the world loads)
     let loading = current_anim(&player_ref.chr_ins) == -1;
+    if loading {
+        ap_capabilities::set_live_instance(false);
+    }
     let paused = WORLD_PAUSED.load(Ordering::Relaxed);
     let hide_why = if m.dead {
         Some("dead")
@@ -1719,6 +1732,7 @@ fn frame(data: &FD4TaskData) {
     // the player (HP back), Mario is recreated fresh where the player now is.
     let hp = player_ref.chr_ins.modules.data.hp;
     if !m.dead && hp <= 0 {
+        ap_capabilities::set_live_instance(false);
         m.dead = true;
         let id = m.id;
         worker::call("kill", move |_| unsafe { sm64::sm64_mario_kill(id) });
@@ -1728,6 +1742,7 @@ fn frame(data: &FD4TaskData) {
         swing::reset();
         carry::reset();
     } else if m.dead && hp > 0 {
+        ap_capabilities::set_live_instance(false);
         log("respawned: recreating Mario");
         m.moving.clear(&mut m.havok);
         let id = m.id;
@@ -2145,6 +2160,7 @@ fn frame(data: &FD4TaskData) {
                 }
             }
             None => {
+                ap_capabilities::set_live_instance(false);
                 log(format!("last mario state before hang: {:?}", m.state));
                 log(format!("surfaces loaded: {}", m.surfaces.len()));
                 return;
@@ -2175,6 +2191,7 @@ fn frame(data: &FD4TaskData) {
     if m.no_ground > 30 {
         log("no ground for 3 s: Mario off, player returned to where Mario mode started");
         RETURN_HOME.store(true, Ordering::Relaxed);
+        ap_capabilities::set_live_instance(false);
         ENABLED.store(false, Ordering::Relaxed);
         return;
     }
@@ -2407,6 +2424,7 @@ fn frame(data: &FD4TaskData) {
                 (None, Some(b)) => Some(engine_mario::to_character(b, q)),
                 _ => None,
             };
+            ap_capabilities::set_live_instance(m.id >= 0 && m.state.action != 0 && m.state.health >= 0x100 && m.parts.is_some() && !loading && !m.dead && !worker::hung());
             return;
         }
     }
@@ -2574,6 +2592,7 @@ fn frame(data: &FD4TaskData) {
         _ => None,
     }
 ;
+    ap_capabilities::set_live_instance(m.id >= 0 && m.state.action != 0 && m.state.health >= 0x100 && m.parts.is_some() && !loading && !m.dead && !worker::hung());
 
     if EZ_MARIO.load(Ordering::Relaxed) {
         // wireframe of libsm64's own mesh over the engine model, to compare
@@ -2700,6 +2719,7 @@ pub unsafe extern "C" fn DllMain(hmodule: usize, reason: u32) -> bool {
             |d: &FD4TaskData| {
                 // a bug in the mod must never take the game down: log it and switch Mario off
                 if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| frame(d))).is_err() {
+                    ap_capabilities::set_live_instance(false);
                     ENABLED.store(false, Ordering::Relaxed);
                     if let Ok(mut g) = MARIO.try_lock() {
                         g.take();

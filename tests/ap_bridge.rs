@@ -68,7 +68,13 @@ fn abi_snapshots_are_validated_and_acknowledged_only_after_worker_application() 
     SM64_READY.store(true, Ordering::Relaxed);
     ENABLED.store(true, Ordering::Relaxed);
     unsafe { er_mario_ap_get_state(&mut state) };
+    assert_eq!(state.flags, 6); // Enabled/assets/libsm64 cannot prove a live Mario.
+    set_live_instance(true);
+    unsafe { er_mario_ap_get_state(&mut state) };
     assert_eq!(state.flags, 7);
+    set_live_instance(false);
+    unsafe { er_mario_ap_get_state(&mut state) };
+    assert_eq!(state.flags, 6);
     assert_eq!(sm64::C_APPLIED.load(Ordering::Relaxed), 0);
     assert_eq!(std::mem::size_of::<State>(), 16);
 }

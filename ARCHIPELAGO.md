@@ -23,11 +23,17 @@ latest request before its next job, including before a Mario tick. The getter
 returns the **applied** snapshot, never a pending request. `out` must point to
 16 writable bytes; null returns 0. Successful queries return 1.
 
-Flags: bit 0 means libsm64 initialized, generated assets available, and worker
-not hung; bit 1 means Mario enabled; bit 2 means the applied snapshot matches the
+Flags: bit 0 means libsm64 initialized, generated assets available, worker
+not hung, and a live Mario instance with a successful tick and usable pose;
+bit 1 means Mario enabled; bit 2 means the applied snapshot matches the
 latest requested snapshot. An accepted setter call is not an acknowledgement of
 application. Wait for all three flags and matching masks before admitting the
 player to a Mario seed.
+
+Instance readiness is cleared before creation failures, deletion, respawn,
+loading, death, missing poses, safety shutdown and caught game-thread panics.
+It is published by the game thread through an atomic; the ABI query never locks
+the Mario state mutex.
 
 | Bit | Capability |
 | --- | --- |
