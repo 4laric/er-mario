@@ -54,7 +54,8 @@ struct MarioInstance
 };
 struct ObjPool s_mario_instance_pool = { 0, 0 };
 
-SM64_LIB_FN void sm64_er_ap_set_max_wedges(uint32_t wedges) {
+/* Internal worker-only entry point; the public Rust ABI queues the request. */
+void sm64_er_ap_set_max_wedges(uint32_t wedges) {
     if (wedges < 4 || wedges > 8) return;
     er_ap_max_wedges = wedges;
     for (int i = 0; i < s_mario_instance_pool.size; i++) {
