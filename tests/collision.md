@@ -55,6 +55,21 @@ Tests also preserve a genuine low roof and ceiling checks above raised landing f
 All callers of the existing ceiling helper use this correction. Re-test the reported ledge
 and check real roofs/overhangs in-game before claiming the live incident is resolved.
 
+## Boss throw through arena walls
+
+BOFA remained stuck after being thrown through a solid wall, but returned after a fog-wall
+throw. Carry placement now checks the boss's leading radius against the map. Guided flight
+no longer ignores detected contacts for its first 0.08 seconds. Ragdoll crossings remember the
+near-side contact and restore the root there after the ragdoll settles, before the boss AI
+resumes. The existing rule against disabling a tumbling ragdoll is preserved. Throw rays check
+the player-blocker filter as well as
+the existing terrain filter. The off-map return behavior remains in place.
+
+Portable tests cover radius separation, reverse-direction contacts and very close hits without
+backward teleportation. Live validation must cover carrying/spinning near walls, immediate
+throws into walls, full-speed/ragdoll impacts, ground impacts and fog-boundary throws. Confirm
+impact damage is applied once and the surviving boss resumes the fight on the reachable side.
+
 ## In-game validation still required
 
 The reported rock location was unspecified. No Elden Ring session was launched during this

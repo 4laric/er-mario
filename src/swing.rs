@@ -195,7 +195,7 @@ enum Phase {
     Held { boss: FieldInsHandle, reach: f32 },
     Flying { boss: FieldInsHandle, pos: Vec3, vel: Vec3, since: Instant, radius: f32 },
     /// knocked flat after the impact (his ragdoll), until he gets back up
-    Down { boss: FieldInsHandle, until: Instant },
+    Down { boss: FieldInsHandle, until: Instant, safe: Option<Vec3> },
     /// landed without a ragdoll (big bosses): a moment of protection while the game settles him
     /// (he can stay in his falling animation, and the game's fall death would take him)
     Settling { boss: FieldInsHandle, until: Instant },
@@ -204,7 +204,7 @@ enum Phase {
     Returning { boss: FieldInsHandle, until: Instant },
     /// flying limp: his ragdoll carries the throw's speed (the physics moves him now); `peak` the
     /// fastest he went, `still` how long he's barely moved
-    Limp { boss: FieldInsHandle, last: Vec3, peak: f32, since: Instant, still: f32, frames: u32 },
+    Limp { boss: FieldInsHandle, last: Vec3, peak: f32, since: Instant, still: f32, frames: u32, radius: f32 },
 }
 
 struct State {
@@ -379,7 +379,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
     st.last_face = Some(face);
     match st.phase {
         Phase::Idle => None,
-        Phase::Down { boss, until } => {
+        Phase::Down { boss, until, safe } => {
             let Some(chr) = wcm.chr_ins_by_handle_mut(&boss) else {
                 st.phase = Phase::Idle;
                 return None;
@@ -407,6 +407,15 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                 set_ragdoll(chr, RAGDOLL_FULL);
             } else {
                 set_ragdoll(chr, 0.0);
+                if let Some(p) = safe {
+                    // Only relocate after the ragdoll has settled: switching it
+                    // off while tumbling is unsafe. Restore the near-side contact
+                    // before giving control back to the boss AI.
+                    chr.modules.physics.position = HavokPosition(p.x, p.y, p.z, 0.0);
+                    chr.modules.physics.chr_proxy_pos_update_requested = true;
+                    chr.modules.physics.gravity_disabled = false;
+                    clear_fall(chr);
+                }
                 log("swing: boss back on his feet");
                 st.phase = Phase::Idle;
             }
@@ -445,7 +454,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
             }
             None
         }
-        Phase::Limp { boss, last, peak, since, still, frames } => {
+        Phase::Limp { boss, last, peak, since, still, frames, radius } => {
             let Some(chr) = wcm.chr_ins_by_handle_mut(&boss) else {
                 st.phase = Phase::Idle;
                 return None;
@@ -479,17 +488,22 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
             }
             // the impact: his speed collapses, he runs into the map, or he's come to rest
             let stopped = !settle && v < speed * 0.35;
-            let into_map = !settle && hit(last + Vec3::Y * 0.5, now + Vec3::Y * 0.5).is_some();
+            let contact = hit(last + Vec3::Y * 0.5, now + Vec3::Y * 0.5);
+            let into_map = contact.is_some();
             if stopped || into_map || still > 0.3 || age > 4.0 {
                 let pct = IMPACT_MIN + (IMPACT_MAX - IMPACT_MIN) * ((speed - 10.0) / 30.0).clamp(0.0, 1.0);
                 log(format!("swing: limp boss landed at {speed:.1} m/s (stopped {stopped}, map {into_map}): {pct:.0}% of his HP"));
-                st.phase = Phase::Down { boss, until: Instant::now() + std::time::Duration::from_secs_f32(DOWN_FOR + GET_UP) };
+                let safe = contact.map(|h| {
+                    let rest = Vec3::from_array(crate::throw_collision::stop_before_hit((last + Vec3::Y * 0.5).to_array(), h.to_array(), radius)) - Vec3::Y * 0.5;
+                    Vec3::new(rest.x, rest.y.max(h.y), rest.z)
+                });
+                st.phase = Phase::Down { boss, until: Instant::now() + std::time::Duration::from_secs_f32(DOWN_FOR + GET_UP), safe };
                 st.rest = (now, 0.0);
                 // the guard takes his HP after this impact's damage as the new floor
                 st.guard_hp = 0;
                 return Some((boss, pct));
             }
-            st.phase = Phase::Limp { boss, last: now, peak: speed, since, still, frames: frames + 1 };
+            st.phase = Phase::Limp { boss, last: now, peak: speed, since, still, frames: frames + 1, radius };
             None
         }
         Phase::Held { boss, reach } => {
@@ -505,7 +519,12 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
             if holding || START.load(std::sync::atomic::Ordering::Relaxed) {
                 // at arm's length where Mario faces, a little off the ground, facing away (Bowser's
                 // tail is in Mario's hands)
-                let p = mario + fwd * reach + Vec3::Y * 0.4;
+                let start = mario + Vec3::Y * 0.4;
+                let radius = (reach - 0.9).max(0.4);
+                let desired = start + fwd * reach;
+                let p = hit(start, desired + fwd * radius)
+                    .map(|h| Vec3::from_array(crate::throw_collision::stop_before_hit(start.to_array(), h.to_array(), radius)))
+                    .unwrap_or(desired);
                 ph.position = HavokPosition(p.x, p.y, p.z, 0.0);
                 ph.chr_proxy_pos_update_requested = true;
                 ph.gravity_disabled = true;
@@ -546,9 +565,8 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
             let impact = hit(pos + Vec3::Y * 0.5, next + lead + Vec3::Y * 0.5).or_else(|| hit(pos + Vec3::Y * 0.5, next - Vec3::Y * 0.1));
             let speed = vel.length();
             match impact {
-                Some(h) if since.elapsed().as_secs_f32() > 0.08 => {
-                    let back = (h - pos).normalize_or_zero() * radius;
-                    let rest = h - back;
+                Some(h) => {
+                    let rest = Vec3::from_array(crate::throw_collision::stop_before_hit((pos + Vec3::Y * 0.5).to_array(), h.to_array(), radius)) - Vec3::Y * 0.5;
                     ph.position = HavokPosition(rest.x, rest.y.max(h.y), rest.z, 0.0);
                     ph.chr_proxy_pos_update_requested = true;
                     ph.gravity_disabled = false;
@@ -563,7 +581,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                     }
                     st.rest = (rest, 0.0);
                     st.phase = if chr.chr_ctrl.chr_ragdoll_state != 0 {
-                        Phase::Down { boss, until: Instant::now() + std::time::Duration::from_secs_f32(DOWN_FOR + GET_UP) }
+                        Phase::Down { boss, until: Instant::now() + std::time::Duration::from_secs_f32(DOWN_FOR + GET_UP), safe: Some(Vec3::new(rest.x, rest.y.max(h.y), rest.z)) }
                     } else {
                         Phase::Settling { boss, until: Instant::now() + std::time::Duration::from_secs(2) }
                     };
@@ -587,7 +605,7 @@ pub fn update(dt: f32, mario: Vec3, face: f32, action: u32, hit: impl Fn(Vec3, V
                     log(format!("swing: limp flight at {speed:.1} m/s"));
                     st.throw_speed = speed;
                     st.falling = 0.0;
-                    st.phase = Phase::Limp { boss, last: pos, peak: speed, since: Instant::now(), still: 0.0, frames: 0 };
+                    st.phase = Phase::Limp { boss, last: pos, peak: speed, since: Instant::now(), still: 0.0, frames: 0, radius };
                     None
                 }
                 _ => {
