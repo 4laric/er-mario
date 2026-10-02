@@ -113,9 +113,44 @@ static void rock_wall(void) {
     surfaces_unload_all();
 }
 
+static void stake_gap(void) {
+    /* A jump's 35-unit wall probe lands on the shared edge of two triangles.
+     * Both left faces must not apply the same displacement from the original
+     * position: that pushes Mario through the opposite stake at x=70. */
+    const struct SM64Surface stakes[] = {
+        {0, 0, 0, {{0, 0, -200}, {0, 200, 200}, {0, 0, 200}}},
+        {0, 0, 0, {{0, 0, -200}, {0, 200, -200}, {0, 200, 200}}},
+        {0, 0, 0, {{70, 0, -200}, {70, 0, 200}, {70, 200, 200}}},
+        {0, 0, 0, {{70, 0, -200}, {70, 200, 200}, {70, 200, -200}}}
+    };
+    /* Havok refreshes need not enumerate adjacent faces in the same order. */
+    for (int a = 0; a < 4; a++)
+    for (int b = 0; b < 4; b++)
+    for (int c = 0; c < 4; c++)
+    for (int d = 0; d < 4; d++) {
+        if (a == b || a == c || a == d || b == c || b == d || c == d) continue;
+        const struct SM64Surface ordered[] = {stakes[a], stakes[b], stakes[c], stakes[d]};
+        for (int refresh = 0; refresh < 5; refresh++) {
+            surfaces_load_static(ordered, 4);
+            for (int side = 0; side < 2; side++) {
+                float x = side ? 75 : -5, y = 100, z = 0;
+                assert(f32_find_wall_collision(&x, &y, &z, 0, 35) > 0);
+                assert(fabsf(x - 35) < 0.01f);
+                assert(fabsf(z) < 0.01f && y == 100);
+                for (int tick = 0; tick < 10; tick++) {
+                    f32_find_wall_collision(&x, &y, &z, 0, 35);
+                    assert(fabsf(x - 35) < 0.01f);
+                }
+            }
+        }
+    }
+    surfaces_unload_all();
+}
+
 int main(void) {
+    stake_gap();
     rock_wall();
     lifts();
-    puts("rock collision and elevator regression tests passed");
+    puts("stake seams, rock collision and elevator regression tests passed");
     return 0;
 }
