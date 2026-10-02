@@ -20,6 +20,9 @@ jobs:
           python-version: '3.12'
       - uses: dtolnay/rust-toolchain@stable
       - uses: ilammy/msvc-dev-cmd@v1
+      - name: Test paired AP and map profile
+        shell: powershell
+        run: ./tests/paired_profile.ps1
       - name: Import public model source (no ROM)
         working-directory: libsm64
         run: python import-mario-geo.py
