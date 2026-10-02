@@ -135,6 +135,10 @@ impl Drop for GeometryGuard<'_> {
 
 unsafe extern "C" {
     pub fn sm64_er_ap_set_capabilities(managed: u32, unlocked: u32);
+    pub fn sm64_er_fludd_configure(enabled: u32, mask: u32, level: u32);
+    pub fn sm64_er_fludd_input(allowed: u32, held: u32, select: u32, cycle: u32);
+    pub fn sm64_er_fludd_refill();
+    pub fn sm64_er_fludd_get_state(out: *mut u32);
     pub fn sm64_er_ap_set_max_wedges(wedges: u32);
     pub fn sm64_er_ap_attack_allowed(action: u32) -> i32;
     pub fn sm64_global_init(rom: *const u8, out_texture: *mut u8);

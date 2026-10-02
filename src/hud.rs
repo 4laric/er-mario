@@ -481,6 +481,13 @@ impl ImguiRenderLoop for Overlay {
             }
         }
 
+        let fludd = crate::ap_fludd::visual();
+        if fludd.enabled {
+            let name = match fludd.selected_nozzle { 1 => "Hover", 2 => "Rocket", 4 => "Turbo", _ => "Locked" };
+            dl.add_text([size[0] * 0.5 + 50.0 * px, size[1] - 65.0 * px], [0.3, 0.85, 1.0, 1.0],
+                format!("FLUDD {name} {}/{}  RB / J", fludd.water_units, fludd.capacity_units));
+        }
+
         // enemy health bars (Elden Ring's style: dark frame, red HP, yellow for the combo's damage)
         // over the heads of what Mario hit, with the combo's damage in SM64's digits
         for tag in TAGS.lock().unwrap_or_else(|e| e.into_inner()).iter() {

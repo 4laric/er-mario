@@ -26,6 +26,10 @@ pub static CAPTURE: AtomicBool = AtomicBool::new(false);
 /// DirectInput scancodes the game must not see in Mario mode: W A S D, L, comma, K
 const HIDDEN: [u32; 7] = [0x11, 0x1E, 0x1F, 0x20, 0x26, 0x33, 0x25];
 
+fn hidden(k: u32) -> bool {
+    HIDDEN.contains(&k) || (crate::ap_fludd::visual().enabled && !crate::MENU_OPEN.load(Ordering::Relaxed) && (k == 0x24 || k == 0x17))
+}
+
 const VK_W: i32 = 0x57;
 const VK_A: i32 = 0x41;
 const VK_S: i32 = 0x53;
@@ -49,6 +53,8 @@ pub fn focused() -> bool {
 }
 
 pub struct Keys {
+    pub fludd: bool,
+    pub nozzle: bool,
     pub stick_x: f32,
     pub stick_y: f32,
     pub a: bool,
@@ -71,6 +77,8 @@ pub fn read() -> Option<Keys> {
         a: down(VK_L) || down(VK_RBUTTON),
         b: down(VK_COMMA) || down(VK_LBUTTON),
         z: down(VK_K),
+        fludd: down(0x4A),
+        nozzle: down(0x49),
     })
 }
 
@@ -142,6 +150,9 @@ pub unsafe fn install_hooks() {
                 for &k in &HIDDEN {
                     unsafe { *data.add(k as usize) = 0 };
                 }
+                if crate::ap_fludd::visual().enabled && !crate::MENU_OPEN.load(Ordering::Relaxed) {
+                    for k in [0x24usize, 0x17usize] { unsafe { *data.add(k) = 0 }; }
+                }
             }
             rc as u32 as usize
         };
@@ -155,7 +166,7 @@ pub unsafe fn install_hooks() {
                 // DIDEVICEOBJECTDATA: dwOfs (the scancode), dwData (0x80 = pressed), ...
                 for i in 0..unsafe { *count } as usize {
                     let e = unsafe { data.add(i * obj as usize) };
-                    if HIDDEN.contains(&unsafe { *(e as *const u32) }) {
+                    if hidden(unsafe { *(e as *const u32) }) {
                         unsafe { *(e.add(4) as *mut u32) = 0 };
                     }
                 }

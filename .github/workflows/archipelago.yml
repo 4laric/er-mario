@@ -51,6 +51,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./ap_stats_tests.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustc --edition=2024 --test tests/fludd_geometry.rs -o fludd_geometry_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./fludd_geometry_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          clang-cl /Ilibsm64/src tests/fludd.c libsm64/src/er_fludd_policy.c /Fe:fludd_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./fludd_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          clang-cl /Ilibsm64/src /Ilibsm64/src/decomp/include /Ishim /DGBI_FLOATS /DVERSION_US tests/fludd_physics.c libsm64/src/er_fludd.c libsm64/src/er_fludd_policy.c /Fe:fludd_physics_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./fludd_physics_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --locked --release

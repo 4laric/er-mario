@@ -3,6 +3,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static SM64_READY: AtomicBool = AtomicBool::new(false);
 static ENABLED: AtomicBool = AtomicBool::new(false);
+mod paths {
+    pub fn config(_: &str) -> Option<String> {
+        None
+    }
+}
 mod assets {
     pub fn ready() -> bool {
         true
@@ -15,6 +20,24 @@ mod worker {
 }
 mod sm64 {
     use super::*;
+    static FLUDD: std::sync::Mutex<[u32; 5]> = std::sync::Mutex::new([0, 0, 0, 0, 60]);
+    pub unsafe fn sm64_er_fludd_configure(enabled: u32, mask: u32, level: u32) {
+        let mut s = FLUDD.lock().unwrap();
+        s[0] = enabled;
+        if s[1] & mask == 0 {
+            s[1] = mask & mask.wrapping_neg();
+        }
+        s[4] = 60 + 20 * level;
+        s[3] = s[3].min(s[4]);
+        if enabled == 0 {
+            s[1] = 0;
+            s[2] = 0;
+            s[3] = 0;
+        }
+    }
+    pub unsafe fn sm64_er_fludd_get_state(out: *mut u32) {
+        unsafe { std::ptr::copy_nonoverlapping(FLUDD.lock().unwrap().as_ptr(), out, 5) };
+    }
     pub static C_MAX_WEDGES: AtomicU64 = AtomicU64::new(8);
     pub unsafe fn sm64_er_ap_set_max_wedges(wedges: u32) {
         C_MAX_WEDGES.store(u64::from(wedges), Ordering::Relaxed);
@@ -29,6 +52,8 @@ mod sm64 {
 }
 #[path = "../src/ap_capabilities.rs"]
 mod ap_capabilities;
+#[path = "../src/ap_fludd.rs"]
+mod ap_fludd;
 #[path = "../src/ap_stats.rs"]
 mod ap_stats;
 
@@ -47,7 +72,7 @@ fn abi_snapshots_are_validated_and_acknowledged_only_after_worker_application() 
     assert_eq!(unsafe { er_mario_ap_get_state(&mut state) }, 1);
     assert_eq!(
         state.flags,
-        4 | (SUPPORTS_REGRESSION_INTERACT | ap_stats::SUPPORTS_STATS)
+        4 | (SUPPORTS_REGRESSION_INTERACT | ap_stats::SUPPORTS_STATS | ap_fludd::SUPPORTS_FLUDD)
     );
     assert!(allows(ALL));
     assert_eq!(er_mario_ap_set_capabilities(ALL + 1, 0), 0);
@@ -59,7 +84,9 @@ fn abi_snapshots_are_validated_and_acknowledged_only_after_worker_application() 
         (
             0,
             0,
-            4 | (SUPPORTS_REGRESSION_INTERACT | ap_stats::SUPPORTS_STATS)
+            4 | (SUPPORTS_REGRESSION_INTERACT
+                | ap_stats::SUPPORTS_STATS
+                | ap_fludd::SUPPORTS_FLUDD)
         )
     );
     for unlocked in 0..=ALL {
@@ -73,7 +100,9 @@ fn abi_snapshots_are_validated_and_acknowledged_only_after_worker_application() 
             (
                 ALL,
                 unlocked,
-                4 | (SUPPORTS_REGRESSION_INTERACT | ap_stats::SUPPORTS_STATS)
+                4 | (SUPPORTS_REGRESSION_INTERACT
+                    | ap_stats::SUPPORTS_STATS
+                    | ap_fludd::SUPPORTS_FLUDD)
             )
         );
         for bit in [1, 2, 4, 8, 16, ENEMY_GRAB, BOSS_SWING, 128, 256, 512] {
@@ -92,19 +121,19 @@ fn abi_snapshots_are_validated_and_acknowledged_only_after_worker_application() 
     unsafe { er_mario_ap_get_state(&mut state) };
     assert_eq!(
         state.flags,
-        6 | (SUPPORTS_REGRESSION_INTERACT | ap_stats::SUPPORTS_STATS)
+        6 | (SUPPORTS_REGRESSION_INTERACT | ap_stats::SUPPORTS_STATS | ap_fludd::SUPPORTS_FLUDD)
     ); // Enabled/assets/libsm64 cannot prove a live Mario.
     set_live_instance(true);
     unsafe { er_mario_ap_get_state(&mut state) };
     assert_eq!(
         state.flags,
-        7 | (SUPPORTS_REGRESSION_INTERACT | ap_stats::SUPPORTS_STATS)
+        7 | (SUPPORTS_REGRESSION_INTERACT | ap_stats::SUPPORTS_STATS | ap_fludd::SUPPORTS_FLUDD)
     );
     set_live_instance(false);
     unsafe { er_mario_ap_get_state(&mut state) };
     assert_eq!(
         state.flags,
-        6 | (SUPPORTS_REGRESSION_INTERACT | ap_stats::SUPPORTS_STATS)
+        6 | (SUPPORTS_REGRESSION_INTERACT | ap_stats::SUPPORTS_STATS | ap_fludd::SUPPORTS_FLUDD)
     );
     assert_eq!(sm64::C_APPLIED.load(Ordering::Relaxed), 0);
     assert_eq!(std::mem::size_of::<State>(), 16);
@@ -170,4 +199,70 @@ fn stats_extension_queues_valid_snapshots_and_uses_applied_values_for_damage_and
     assert_eq!(er_mario_ap_set_stats(8, 10000), 1);
     apply();
     assert_eq!((max_wedges(), power_basis_points()), (8, 10000));
+}
+
+#[test]
+fn fludd_abi_is_additive_validated_and_worker_acknowledged() {
+    let _guard = TEST_LOCK.lock().unwrap();
+    use ap_fludd::*;
+    assert_eq!(std::mem::size_of::<FluddState>(), 28);
+    assert_eq!(HOVER | ROCKET | TURBO, 7);
+    assert_eq!(
+        unsafe { er_mario_ap_get_fludd_state(std::ptr::null_mut()) },
+        0
+    );
+    let mut s = FluddState {
+        abi_version: 0,
+        flags: 0,
+        unlocked_nozzles: 0,
+        tank_level: 0,
+        selected_nozzle: 0,
+        water_units: 0,
+        capacity_units: 0,
+    };
+    for args in [
+        (2, 0, 0),
+        (1, 8, 0),
+        (1, 7, 4),
+        (0, 1, 0),
+        (0, 0, 1),
+        (u32::MAX, u32::MAX, u32::MAX),
+    ] {
+        assert_eq!(er_mario_ap_set_fludd(args.0, args.1, args.2), 0);
+    }
+    for mask in 0..=7 {
+        for tier in 0..=3 {
+            assert_eq!(er_mario_ap_set_fludd(1, mask, tier), 1);
+            unsafe { er_mario_ap_get_fludd_state(&mut s) };
+            assert_eq!(s.flags & 4, 0);
+            apply();
+            unsafe { er_mario_ap_get_fludd_state(&mut s) };
+            assert_eq!(
+                (
+                    s.flags & 6,
+                    s.unlocked_nozzles,
+                    s.tank_level,
+                    s.capacity_units
+                ),
+                (6, mask, tier, 60 + 20 * tier)
+            );
+            assert_eq!(s.selected_nozzle & !mask, 0);
+            assert_eq!(er_mario_ap_set_fludd(1, mask, tier), 1);
+            apply();
+            assert_eq!(visual().capacity_units, 60 + 20 * tier);
+            assert!(visual().enabled && !visual().active);
+        }
+    }
+    assert_eq!(er_mario_ap_set_fludd(0, 0, 0), 1);
+    apply();
+    unsafe { er_mario_ap_get_fludd_state(&mut s) };
+    assert_eq!(
+        (
+            s.flags & 6,
+            s.selected_nozzle,
+            s.water_units,
+            s.capacity_units
+        ),
+        (4, 0, 0, 60)
+    );
 }

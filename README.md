@@ -38,6 +38,26 @@ work through Steam Input, which Steam turns on for them by default.
 
 **Stay offline.** me3 starts the game offline with anti-cheat off. Never play this mod online.
 
+## FLUDD (experimental AP fork builds)
+
+This fork includes an original FLUDD backpack with Hover, Rocket and Turbo nozzles.
+Set `fludd = on` in `er_mario.ini` to enable all three for standalone play. Archipelago
+controls FLUDD and its unlocks when connected; enable `mario_fludd` in your player YAML.
+These changes are development builds, not part of the upstream release linked above.
+
+Hold **RB** to use the selected nozzle. While holding RB, **D-pad Up** selects Hover,
+**Down** selects Rocket, **Right** selects Turbo, and **Left** cycles unlocked nozzles.
+On keyboard, hold **J** to use FLUDD and press **I** to cycle nozzles. Rocket and Turbo
+charge before firing; ordinary jump, attack and crouch inputs take priority.
+
+The HUD shows the selected nozzle and water remaining. Release FLUDD and stand still
+on the ground to refill gradually; resting at a grace or respawning refills the tank.
+AP tank upgrades increase capacity from 60 to 80, 100 and 120 without refilling water.
+Squirt is not included.
+
+The backpack adds generated model parts. On the first start with this build, allow
+asset setup to finish, then restart when prompted, as during initial installation.
+
 ## Known issues
 
 - Cutscenes show a crumpled Mario with the Tarnished's head.
