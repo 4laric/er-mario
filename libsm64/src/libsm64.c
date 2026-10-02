@@ -268,7 +268,7 @@ SM64_LIB_FN void sm64_mario_tick( int32_t marioId, const struct SM64MarioInputs 
 
     apply_mario_platform_displacement();
     bhv_mario_update();
-    update_mario_platform(); // TODO platform grabbed here and used next tick could be a use-after-free
+    update_mario_platform();
 
     gfx_adapter_bind_output_buffers( outBuffers );
 
@@ -649,6 +649,11 @@ SM64_LIB_FN bool sm64_mario_attack(int32_t marioId, float x, float y, float z, f
 SM64_LIB_FN uint32_t sm64_surface_object_create( const struct SM64SurfaceObject *surfaceObject )
 {
     uint32_t id = surfaces_load_object( surfaceObject );
+    for (int i = 0; i < s_mario_instance_pool.size; ++i) {
+        struct MarioInstance *instance = s_mario_instance_pool.objects[i];
+        if (instance != NULL)
+            er_attach_platform(instance->globalState, surfaces_object_get_transform_ptr(id));
+    }
     return id;
 }
 
@@ -666,8 +671,7 @@ SM64_LIB_FN void sm64_surface_object_delete( uint32_t objectId )
             continue;
 
         struct GlobalState *state = ((struct MarioInstance *)s_mario_instance_pool.objects[ i ])->globalState;
-        if( state->mgMarioObject->platform == surfaces_object_get_transform_ptr( objectId ))
-            state->mgMarioObject->platform = NULL;
+        er_detach_platform(state, surfaces_object_get_transform_ptr(objectId));
     }
 
     surfaces_unload_object( objectId );

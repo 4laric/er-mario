@@ -146,7 +146,9 @@ static struct SM64SurfaceCollisionData *find_floor_from_list( s32 x, s32 y, s32 
             continue;
         }
 
-        if( height > *pheight )
+        // On a static -> moving handoff, prefer the object at the same height so a rider
+        // attaches before the first displacement rather than staying on the stale static copy.
+        if( height > *pheight || (height == *pheight && surf->transform != NULL) )
         {
             *pheight = height;
             floor = surf;
