@@ -62,7 +62,7 @@ use windows::Win32::UI::Input::XboxController::{
     XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_B, XINPUT_GAMEPAD_LEFT_SHOULDER,
     XINPUT_GAMEPAD_BACK, XINPUT_GAMEPAD_START, XINPUT_GAMEPAD_X, XINPUT_GAMEPAD_Y,
     XINPUT_GAMEPAD_RIGHT_SHOULDER, XINPUT_GAMEPAD_DPAD_UP, XINPUT_GAMEPAD_DPAD_DOWN,
-    XINPUT_GAMEPAD_DPAD_LEFT, XINPUT_GAMEPAD_DPAD_RIGHT, XINPUT_GAMEPAD_LEFT_THUMB,
+    XINPUT_GAMEPAD_DPAD_LEFT, XINPUT_GAMEPAD_DPAD_RIGHT,
     XINPUT_GAMEPAD_RIGHT_THUMB, XINPUT_STATE,
 };
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
@@ -175,7 +175,7 @@ fn xinput_filter(index: u32, state: *mut XINPUT_STATE, rc: u32) -> u32 {
         if ap_cappy::visual().enabled { g.bRightTrigger = 0; }
         if ap_sonic::visual().enabled {
             let dash = input_policy::air_dash_chord(true, g.wButtons.contains(XINPUT_GAMEPAD_LEFT_SHOULDER), g.wButtons.contains(XINPUT_GAMEPAD_RIGHT_THUMB));
-            g.wButtons &= !XINPUT_GAMEPAD_LEFT_THUMB;
+            g.bLeftTrigger = 0;
             if dash { g.wButtons &= !(XINPUT_GAMEPAD_RIGHT_THUMB | XINPUT_GAMEPAD_LEFT_SHOULDER); }
         }
         // with the SM64 camera the right stick is Lakitu's C-buttons, not Elden Ring's camera
@@ -1048,7 +1048,7 @@ fn input_task() {
             || b.contains(XINPUT_GAMEPAD_X)
             || b.contains(XINPUT_GAMEPAD_Y)
             || b.contains(XINPUT_GAMEPAD_LEFT_SHOULDER)
-            || g.bLeftTrigger > 100
+            || (g.bLeftTrigger > 100 && (menu || !ap_sonic::visual().enabled))
             || (menu && stick);
         right_trigger = g.bRightTrigger;
         opener |= b.contains(XINPUT_GAMEPAD_START) || b.contains(XINPUT_GAMEPAD_BACK);
@@ -1915,7 +1915,7 @@ fn frame(data: &FD4TaskData) {
             inputs.stick_x = axis(g.sThumbLX);
             inputs.stick_y = -axis(g.sThumbLY);
             cap_held = g.bRightTrigger > 100;
-            spin_held = g.wButtons.contains(XINPUT_GAMEPAD_LEFT_THUMB);
+            spin_held = ap_sonic::visual().enabled && g.bLeftTrigger > 100;
             air_dash = input_policy::air_dash_chord(ap_sonic::visual().enabled, g.wButtons.contains(XINPUT_GAMEPAD_LEFT_SHOULDER), g.wButtons.contains(XINPUT_GAMEPAD_RIGHT_THUMB));
             fludd_held = g.wButtons.contains(XINPUT_GAMEPAD_RIGHT_SHOULDER);
             if fludd_held {
@@ -1927,7 +1927,7 @@ fn frame(data: &FD4TaskData) {
             inputs.button_a = g.wButtons.contains(XINPUT_GAMEPAD_A) as u8;
             // X is native item use; B remains Mario's punch/grab/throw.
             inputs.button_b = g.wButtons.contains(XINPUT_GAMEPAD_B) as u8;
-            inputs.button_z = ((!air_dash && g.wButtons.contains(XINPUT_GAMEPAD_LEFT_SHOULDER)) || g.bLeftTrigger > 100) as u8;
+            inputs.button_z = ((!air_dash && g.wButtons.contains(XINPUT_GAMEPAD_LEFT_SHOULDER)) || (!ap_sonic::visual().enabled && g.bLeftTrigger > 100)) as u8;
         }
         // SM64's first-person view: Mario stands still, the stick looks around
         if lakitu::first_person() {
