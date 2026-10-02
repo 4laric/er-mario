@@ -4,6 +4,7 @@
 #include "../engine/surface_collision.h"
 #include "level_update.h"
 #include "../include/object_fields.h"
+#include "../include/sm64.h"
 #include "object_stuff.h"
 #include "platform_displacement.h"
 #include "../shim.h"
@@ -11,6 +12,33 @@
 #include "../../load_surfaces.h"
 
 #define absfx( x ) ( (x) < 0.0f ? -(x) : (x) )
+
+// Transfer a grounded rider at the object's initial (last static) pose. The caller then moves
+// the object, preserving even the first tick's displacement. Jumping/falling riders stay free.
+void er_attach_platform(struct GlobalState *state, struct SM64SurfaceObjectTransform *platform) {
+    struct MarioState *m = &state->mgMarioStateVal;
+    if (state->mgMarioObject == NULL || state->mgMarioObject->platform != NULL
+        || (m->action & ACT_FLAG_AIR)) return;
+    struct SM64SurfaceCollisionData *floor;
+    f32 height = find_floor(m->pos[0], m->pos[1], m->pos[2], &floor);
+    if (floor != NULL && floor->transform == platform && absfx(m->pos[1] - height) < 4.0f) {
+        state->mgMarioObject->platform = platform;
+        m->floor = floor;
+        m->floorHeight = height;
+    }
+}
+
+// Surface references live across ticks, as does the platform pointer. Clear every reference
+// before unloading an object's triangles (streaming, slot reuse, or Mario's reset).
+void er_detach_platform(struct GlobalState *state, struct SM64SurfaceObjectTransform *platform) {
+    if (platform == NULL) return;
+    struct MarioState *m = &state->mgMarioStateVal;
+    if (state->mgMarioObject != NULL && state->mgMarioObject->platform == platform)
+        state->mgMarioObject->platform = NULL;
+    if (m->floor != NULL && m->floor->transform == platform) m->floor = NULL;
+    if (m->wall != NULL && m->wall->transform == platform) m->wall = NULL;
+    if (m->ceil != NULL && m->ceil->transform == platform) m->ceil = NULL;
+}
 
 /**
  * Determine if Mario is standing on a platform object, meaning that he is
@@ -112,6 +140,7 @@ void apply_platform_displacement(u32 isMario, struct SM64SurfaceObjectTransform 
 //  }
 
     x += platform->aVelX;
+    y += platform->aVelY;
     z += platform->aVelZ;
 
     if (rotation[0] != 0 || rotation[1] != 0 || rotation[2] != 0) {

@@ -18,6 +18,7 @@ mod explore;
 mod gameover;
 mod hud;
 mod moving;
+mod collision_geometry;
 mod names;
 mod paths;
 mod sm64;
@@ -736,7 +737,9 @@ fn havok_surfaces(h: &mut havok_col::HavokCollision, origin: [f32; 3], mario: [f
         crate::dlog(format!("  per body confirmed/picked: {}", rows.join(", ")));
     }
     if tris.is_empty() {
-        return None;
+        // A lift may be the only nearby geometry. Its surface object supplies the floor;
+        // raycast fallback here would recreate a stationary copy of the moving deck.
+        return (!h.exclude.is_empty()).then(Vec::new);
     }
     let mut out = Vec::with_capacity(tris.len());
     let m = glam::Vec3::from(mario);
@@ -761,37 +764,23 @@ fn havok_surfaces(h: &mut havok_col::HavokCollision, origin: [f32; 3], mario: [f
             log(format!("CSHavokMan at {:#x}", h as *const _ as usize));
         }
     }
-    for (t, layer, _) in &tris {
+    let mut centers = std::collections::HashMap::new();
+    for (t, layer, body) in &tris {
+        let mid = if h.is_convex(*body) || h.is_boxed(*body) {
+            *centers.entry(*body).or_insert_with(|| {
+                let mesh = h.mesh_of(*body)?;
+                let (p, q) = h.transform(*body)?;
+                let local = mesh.tris().iter().flatten().copied().sum::<glam::Vec3>() / (mesh.tris().len() * 3) as f32;
+                let world = q * local + p;
+                Some(collision::er_to_sm(origin, &HavokPosition(world.x, world.y, world.z, 0.0)))
+            })
+        } else { None };
         let v = t.map(|p| {
-            let s = collision::er_to_sm(origin, &HavokPosition(p.x, p.y, p.z, 0.0));
-            [s[0].round() as i32, s[1].round() as i32, s[2].round() as i32]
+            collision::er_to_sm(origin, &HavokPosition(p.x, p.y, p.z, 0.0)).map(|x| x.round() as i32)
         });
-        let f = |p: [i32; 3]| glam::Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32);
-        let (a, b, c) = (f(v[0]), f(v[1]), f(v[2]));
-        let n = (b - a).cross(c - b);
-        if n.length_squared() < 1.0 {
-            continue;
-        }
-        let n = n.normalize();
-        let centroid = (a + b + c) / 3.0;
-        // Havok collision is two-sided, SM64 surfaces are not: face each triangle the way Mario
-        // meets it. Flat below head height = floor (up), flat above = ceiling (down), else wall
-        // facing Mario.
-        // (a long ramp's centre can be far up the slope: judge it by its height where Mario is)
-        let want = if n.y.abs() > 0.2 {
-            let lo = a.y.min(b.y).min(c.y);
-            let hi = a.y.max(b.y).max(c.y);
-            let here = (a.y - (n.x * (m.x - a.x) + n.z * (m.z - a.z)) / n.y).clamp(lo, hi);
-            if here < m.y + 120.0 { glam::Vec3::Y } else { -glam::Vec3::Y }
-        } else {
-            let to_mario = m - centroid;
-            glam::Vec3::new(to_mario.x, 0.0, to_mario.z)
-        };
+        let Some(v) = collision_geometry::surface_vertices(v, mid) else { continue };
         let mut surf = sm64::SM64Surface::grass(v);
-        surf.force = *layer as i16; // unused by SM64 for default surfaces; used to colour debug lines
-        if n.dot(want) < 0.0 {
-            surf.vertices.swap(1, 2);
-        }
+        surf.force = *layer as i16;
         out.push(surf);
     }
     Some(out)
@@ -1456,6 +1445,8 @@ fn frame(data: &FD4TaskData) {
                 explore::class_of(proxy2)
             ));
         }
+        let mut moving = moving::Moving::default();
+        moving.watch_query(&havok);
         MarioState {
             id,
             filter,
@@ -1479,7 +1470,7 @@ fn frame(data: &FD4TaskData) {
             parts: None,
             combat: combat::Combat::new(),
             dead: false,
-            moving: Default::default(),
+            moving,
             stuck_ticks: 0,
             prev_parts: None,
         }
@@ -1743,6 +1734,7 @@ fn frame(data: &FD4TaskData) {
         if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() > 2.0 {
             log(format!("world origin shifted by {d:?}"));
             coins::shift(glam::Vec3::from(d));
+            m.havok.refresh_bodies();
             m.moving.rewatch(&m.havok);
             for i in 0..3 {
                 m.origin[i] += d[i];
@@ -1835,8 +1827,12 @@ fn frame(data: &FD4TaskData) {
             }
         }
         m.ticks += 1;
+        let moving_changed = m.moving.update(&mut m.havok, m.origin, m.state.position);
+        if moving_changed {
+            m.last_query = None;
+        }
         let mut continue_tick = false;
-        if m.ticks % 3 == 0 {
+        if moving_changed || m.ticks % 3 == 0 {
             let caster = collision::Caster { filter: m.filter, origin: m.origin, player: player_ref };
             let t0 = std::time::Instant::now();
             // real collision only needs refreshing when Mario has moved a bit (or every 0.5 s)
@@ -1877,7 +1873,7 @@ fn frame(data: &FD4TaskData) {
             }
             if continue_tick {
                 // nothing to do: keep the loaded surfaces
-            } else if surfaces.is_empty() {
+            } else if surfaces.is_empty() && !from_havok {
                 m.no_ground += 1;
             } else {
                 m.no_ground = 0;
@@ -1897,9 +1893,6 @@ fn frame(data: &FD4TaskData) {
                 load_surfaces(&surfaces);
                 m.surfaces = surfaces;
             }
-        }
-        if m.moving.update(&mut m.havok, m.origin, m.state.position) {
-            m.last_query = None; // rebuild the static collision without (or with) the moving bodies
         }
         let id = m.id;
         // characters Mario could hit this tick, and whether the Tarnished just got hurt
