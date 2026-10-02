@@ -103,11 +103,11 @@ Cap Throw and Cap Bounce separately. Mario keeps his original SM64 capped head a
 and switches to his native uncapped head while the original cap flies, without added eyes.
 Its swept hitbox damages each target once per throw. Enemy capture is not included.
 
-**Sonic movement:** hold **LT** or **U** while stationary on the ground
+**Sonic movement:** hold **Left Stick Click** or **U** while stationary on the ground
 to charge Spin Dash, then release. Its spinning charge animation ramps from 1x to a
 maximum of 3x speed; Mario does not drift during charging. Hold it in the air to charge
 Drop Dash for the next landing. Press
-**LB + Right Stick Click** or **P** to Air Dash once per airtime; landing on the ground
+**LT** or **P** to Air Dash once per airtime; landing on the ground
 restores it. Cap bounces and FLUDD do not restore the aerial moves. AP seeds unlock
 the three moves separately. Charge and dash use a spinning animation and SM64 sounds.
 Only actual dash movement damages targets, once per target per burst; charging does not.

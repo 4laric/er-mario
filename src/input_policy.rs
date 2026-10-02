@@ -1,7 +1,7 @@
 //! Menu inference must only observe buttons that Elden Ring actually receives.
-/// R3 belongs to native lock-on; Sonic takes it only with the dash modifier.
-pub fn air_dash_chord(sonic: bool, left_shoulder: bool, right_click: bool) -> bool {
-    sonic && left_shoulder && right_click
+/// R3 belongs to native lock-on; Sonic's air dash uses LT.
+pub fn air_dash_trigger(sonic: bool, left_trigger: u8) -> bool {
+    sonic && left_trigger > 100
 }
 
 /// A native lock keeps ownership even when Lakitu is the selected free camera.
@@ -18,11 +18,11 @@ pub fn infer_menu(current: bool, routed: bool, opener: bool, pressed: bool, righ
 mod tests {
     use super::*;
     #[test]
-    fn ordinary_lock_click_and_modified_dash_have_distinct_owners() {
-        for (sonic, modifier, click, dash) in [
-            (true, false, true, false), (true, true, true, true),
-            (false, true, true, false), (true, true, false, false),
-        ] { assert_eq!(air_dash_chord(sonic, modifier, click), dash); }
+    fn dash_trigger_requires_sonic_and_a_pressed_trigger() {
+        for (sonic, trigger, dash) in [
+            (true, 0, false), (true, 100, false), (true, 101, true),
+            (true, 255, true), (false, 255, false),
+        ] { assert_eq!(air_dash_trigger(sonic, trigger), dash); }
     }
     #[test]
     fn native_lock_yields_camera_and_unlock_restores_selected_mode() {
