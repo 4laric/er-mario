@@ -29,8 +29,7 @@ You need Elden Ring on Steam and a Super Mario 64 ROM (US version).
 **ER MARIO** and the version in the title screen's bottom left corner
 show the mod is loaded. Start a new character, the mod uses its own save file.
 
-**Stuck somewhere?** Press **F7** to lift Mario 1 m. The mod also lifts him by itself when he
-can't move for a few seconds. If that does not work, you might have to fast travel to a grace.
+The game will let you know at the bottom left corner when a new update is available.
 
 Tested with an Xbox One controller, a PS5 controller (through Steam) and keyboard and mouse.
 The mod reads controllers the way Xbox pads report them: PlayStation, Switch and other pads
