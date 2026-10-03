@@ -16,6 +16,14 @@ use crate::{collision, log, sm64, worker};
 const MAX_TRIS: usize = 3000;
 /// Stop tracking objects this far from Mario (SM64 units).
 const FORGET: f32 = 4000.0;
+/// A body that moves further than this in one tick (metres, degrees) was put there, not moved:
+/// riding it along flung Mario ~40 m when a big box near a lift snapped round by 115 degrees.
+const SNAP_METRES: f32 = 1.0;
+const SNAP_DEGREES: f32 = 10.0;
+
+fn snapped(p0: Vec3, q0: Quat, p: Vec3, q: Quat) -> bool {
+    p0.distance(p) > SNAP_METRES || q0.angle_between(q).to_degrees() > SNAP_DEGREES
+}
 
 struct Tracked {
     id: u32,
@@ -24,6 +32,8 @@ struct Tracked {
     shape: usize,
     /// its triangles (body space), to measure how far Mario is from the nearest one
     mesh: std::sync::Arc<crate::havok_col::Mesh>,
+    /// pose last tick
+    last: (Vec3, Quat),
 }
 
 #[derive(Default)]
@@ -70,7 +80,13 @@ impl Moving {
             .map(|(i, _)| *i)
             .collect();
         for i in moved {
-            let Some((p, q, _)) = self.watch.remove(&i) else { continue };
+            let Some((p, q, shape)) = self.watch.remove(&i) else { continue };
+            if let Some((p1, q1)) = h.transform(i).filter(|(p1, q1)| snapped(p, q, *p1, *q1)) {
+                log(format!("moving: body #{i} snapped to a new pose, staying static ({p:.2?} {q:.3?} -> {p1:.2?} {q1:.3?})"));
+                self.watch.insert(i, (p1, q1, shape));
+                rebuild = true;
+                continue;
+            }
             let Some(mesh) = h.mesh_of(i) else { continue };
             // Build at the last static pose, attach riders there, then apply this tick's motion.
             // Building at the new pose discards the first displacement of a starting lift.
@@ -80,7 +96,7 @@ impl Moving {
             let center = sm(origin, p);
             // convex shapes: every face points away from the middle (built once, so it must not depend
             // on where Mario happens to be)
-            let convex_middle = (h.is_convex(i) || h.is_boxed(i)).then(|| {
+            let convex_middle = (h.is_convex(i) || h.is_boxed(i) || mesh.small_closed()).then(|| {
                 let local = mesh.tris().iter().flatten().copied().sum::<Vec3>() / (mesh.tris().len() * 3) as f32;
                 sm(origin, q * local + p)
             });
@@ -103,8 +119,8 @@ impl Moving {
                 unsafe { sm64::sm64_surface_object_create(&object) }
             });
             if let Some(id) = id {
-                log(format!("moving: body #{i} is moving, now a surface object ({n} triangles)"));
-                self.tracked.insert(i, Tracked { id, q0: q, shape: h.shape_of(i), mesh: mesh.clone() });
+                log(format!("moving: body #{i} is moving, now a surface object ({n} triangles, small closed mesh {})", mesh.small_closed()));
+                self.tracked.insert(i, Tracked { id, q0: q, shape: h.shape_of(i), mesh: mesh.clone(), last: (p, q) });
                 h.exclude.insert(i);
                 rebuild = true;
             }
@@ -112,7 +128,8 @@ impl Moving {
         // move tracked objects along with their bodies
         let mut moves = Vec::new();
         let mut forget = Vec::new();
-        for (i, t) in &self.tracked {
+        let mut snaps = Vec::new();
+        for (i, t) in self.tracked.iter_mut() {
             if h.shape_of(*i) != t.shape {
                 forget.push(*i);
                 continue;
@@ -122,6 +139,13 @@ impl Moving {
                 forget.push(*i);
                 continue;
             };
+            if snapped(t.last.0, t.last.1, p, q) {
+                log(format!("moving: body #{i} snapped to a new pose, back to static ({:.2?} {:.3?} -> {p:.2?} {q:.3?})", t.last.0, t.last.1));
+                forget.push(*i);
+                snaps.push((*i, p, q, t.shape));
+                continue;
+            }
+            t.last = (p, q);
             let center = sm(origin, p);
             // outside the body's whole bounding sphere (+40 m)? Lifts are e.g. 258 m tall cylinders whose
             // top is the platform, so neither the origin nor the vertices say where Mario can touch it
@@ -140,6 +164,9 @@ impl Moving {
                     unsafe { sm64::sm64_surface_object_move(*id, transform) };
                 }
             });
+        }
+        for (i, p, q, shape) in snaps {
+            self.watch.insert(i, (p, q, shape));
         }
         for i in forget {
             if let Some(t) = self.tracked.remove(&i) {
@@ -170,6 +197,17 @@ impl Moving {
                 t.mesh.radius(),
                 t.mesh.tris().len()
             ));
+            // its faces as SM64 sees them now (built at q0, turned by the object's rotation since)
+            let mid = t.mesh.small_closed().then(|| t.mesh.tris().iter().flatten().copied().sum::<Vec3>() / (t.mesh.tris().len() * 3) as f32);
+            out.push(format!("    small closed mesh {}, middle {:?}", t.mesh.small_closed(), mid.map(|v| sm(origin, q * v + p))));
+            for tri in t.mesh.tris() {
+                let w = tri.map(|v| sm(origin, q * v + p));
+                let n = (w[1] - w[0]).cross(w[2] - w[1]).normalize_or_zero();
+                out.push(format!(
+                    "    face {:?} n {:.2?}, Mario {:.0} from its plane",
+                    w.map(|v| v.round().to_array()), n, n.dot(m - w[0])
+                ));
+            }
         }
         out
     }

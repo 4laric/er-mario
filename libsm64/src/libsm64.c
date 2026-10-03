@@ -837,6 +837,20 @@ static struct MarioState *er_bind(int32_t marioId)
     return gMarioState;
 }
 
+// The floor under Mario is lava (the mod knows from the game's floor material): SM64's lava boost
+// (check_lava_boost), but one wedge of health instead of three: Elden Ring's lava pools are wide.
+// Does nothing in the air, so it can be called every tick.
+SM64_LIB_FN void sm64_er_lava(int32_t marioId)
+{
+    struct MarioState *m = er_bind(marioId);
+    if (!m || m->health < 0x100 || m->action == ACT_LAVA_BOOST || (m->action & ACT_FLAG_INTANGIBLE)) return;
+    if (!(m->action & ACT_FLAG_RIDING_SHELL) && m->pos[1] < m->floorHeight + 10.0f) {
+        m->hurtCounter += 4;
+        update_mario_sound_and_camera(m);
+        drop_and_set_mario_action(m, ACT_LAVA_BOOST, 0);
+    }
+}
+
 SM64_LIB_FN void sm64_er_pick_up(int32_t marioId)
 {
     if (!er_ap_allows(32)) return;

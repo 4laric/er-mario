@@ -47,6 +47,24 @@ impl Mesh {
         self.radius
     }
 
+    /// A small closed mesh (a box or wedge modelled as triangles, every edge shared by two of
+    /// them): it has an inside, so its faces can point away from the middle like a convex shape.
+    /// A pillar lift was such a box modelled facing inward, and Mario walked in from the side.
+    pub fn small_closed(&self) -> bool {
+        if self.tris.len() > 24 {
+            return false;
+        }
+        let key = |v: Vec3| (v * 100.0).round().to_array().map(|x| x as i64);
+        let mut edges: HashMap<([i64; 3], [i64; 3]), u32> = HashMap::new();
+        for t in &self.tris {
+            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                let (a, b) = (key(a), key(b));
+                *edges.entry(if a < b { (a, b) } else { (b, a) }).or_default() += 1;
+            }
+        }
+        !edges.is_empty() && edges.values().all(|&n| n == 2)
+    }
+
     fn new(tris: Vec<Tri>) -> Self {
         let mut cells: HashMap<(i32, i32, i32), Vec<u32>> = HashMap::new();
         let mut radius: f32 = 0.0;
@@ -94,9 +112,8 @@ pub struct HavokCollision {
     /// bodies skipped for not being in the physics world (diagnostics)
     pub not_in_world: u32,
     queries: u32,
-    /// box shapes made thicker (fog gates, see `thicken_thin_wall`)
-    thick: std::collections::HashSet<usize>,
 }
+
 
 fn u32_at(a: usize) -> u32 {
     unsafe { *(a as *const u32) }
@@ -112,6 +129,21 @@ fn vec3_at(a: usize) -> Vec3 {
 
 fn u16_at(a: usize) -> u16 {
     unsafe { *(a as *const u16) }
+}
+
+/// A body's rotation in the world: the rotation part of its transform (three columns at +0x00,
+/// +0x10, +0x20; the position we use is the fourth at +0x30). None if it isn't a clean rotation.
+/// The quaternion at +0x80 is the body's rotation relative to its motion: for static bodies that's
+/// (the inverse of) the world one, but a moving lift's is only its turn within the asset, which had
+/// its collision built turned and Mario flung.
+fn body_rotation(body: usize) -> Option<Quat> {
+    let (x, y, z) = (vec3_at(body), vec3_at(body + 0x10), vec3_at(body + 0x20));
+    let unit = |v: Vec3| (v.length() - 1.0).abs() < 0.02;
+    if !(unit(x) && unit(y) && unit(z)) || x.dot(y).abs() > 0.02 || x.dot(z).abs() > 0.02 || y.dot(z).abs() > 0.02 {
+        return None;
+    }
+    let q = Quat::from_mat3(&glam::Mat3::from_cols(x, y, z));
+    q.is_finite().then(|| q.normalize())
 }
 
 /// Decodes a hknp convex shape (hknpBoxShape / hknpConvexPolytopeShape / hknpCylinderShape) into
@@ -180,6 +212,50 @@ fn custom_pieces_box(md: usize) -> Option<Vec<Tri>> {
     // the 6 faces as 12 triangles (facing is decided later, per triangle)
     let faces = [[0, 1, 3, 2], [4, 5, 7, 6], [0, 1, 5, 4], [2, 3, 7, 6], [0, 2, 6, 4], [1, 3, 7, 5]];
     Some(faces.iter().flat_map(|f| [[c(f[0]), c(f[1]), c(f[2])], [c(f[0]), c(f[2]), c(f[3])]]).collect())
+}
+
+/// A compressed mesh's custom pieces: shapes of their own, placed in the mesh's space. The shape
+/// lists them at +0x70 (count at +0x78), 0x70 bytes each, laid out like a compound's instances:
+/// rotation columns at +0x00/+0x10/+0x20, translation +0x30, scale +0x40, child shape +0x50. Lift
+/// platforms and a drawbridge are made of nothing else, and decoded to no triangles at all.
+fn decode_custom_pieces(shape: usize) -> Option<Vec<Tri>> {
+    if !readable(shape, 0x80) {
+        return None;
+    }
+    let list = read_u64(shape + 0x70)? as usize;
+    let n = u32_at(shape + 0x78) as usize;
+    if n == 0 || n > 4096 || !readable(list, n * 0x70) {
+        return None;
+    }
+    let mut out = Vec::new();
+    for k in 0..n {
+        let a = list + k * 0x70;
+        let (c0, c1, c2) = (vec3_at(a), vec3_at(a + 0x10), vec3_at(a + 0x20));
+        let t = vec3_at(a + 0x30);
+        let scale = vec3_at(a + 0x40);
+        if ![c0, c1, c2, t, scale].iter().all(|v| v.is_finite()) || c0.length() > 100.0 || t.length() > 10_000.0 {
+            return None;
+        }
+        let child = read_u64(a + 0x50)? as usize;
+        if child < 0x10000 || !readable(child, 0x50) {
+            continue;
+        }
+        let class = class_of(child).unwrap_or_default();
+        let tris = if class.contains("ConvexPolytopeShape") || class.contains("BoxShape") || class.contains("CylinderShape") {
+            decode_convex(child)
+        } else if class.contains("CompressedMeshShape") {
+            read_u64(child + 0x48).and_then(|md| decode(md as usize))
+        } else {
+            None
+        };
+        for tri in tris.unwrap_or_default() {
+            out.push(tri.map(|v| {
+                let v = v * scale;
+                c0 * v.x + c1 * v.y + c2 * v.z + t
+            }));
+        }
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 /// Decodes a hknpCompressedMeshShapeData into shape-local triangles. None if the layout looks wrong.
@@ -340,30 +416,39 @@ pub fn dump_layer_near(center: Vec3, range: f32, layer: u32) -> Vec<String> {
     out
 }
 
-/// Fog gates are boxes ~14 cm thick. SM64 only pushes Mario out of a wall while he's within his
-/// radius of it, so at running speed he got deep enough for the back face to push him through.
-/// A box that's thin along a horizontal local axis (local y is up) and wide along the other gets
-/// 1.2 m thick (0.6 m still let him run through); floors and ordinary boxes aren't touched.
-/// Going through a fog with interact leaves him inside the thicker box: see `out_of_thick_wall`.
-fn thicken_thin_wall(tris: &mut [Tri]) -> bool {
-    const THIN: f32 = 0.4;
-    let v = tris.iter().flatten();
+/// A lift pillar sits in a shaft a little wider than its collision box: next to it the floor ends
+/// ~0.4 m before the pillar's side. The Tarnished's round capsule rests on that edge, but SM64
+/// checks the floor at Mario's centre, which stopped just past it, and he fell in. A big closed box
+/// on a lift (flags 0x02/0x03, never a building's 0x04) is grown sideways by this much, and more
+/// along its short axis (the long octagon's ends reach further past the box than its long faces);
+/// its sides are no longer where the game's rays would confirm them, so it's trusted like a box
+/// (`boxed`).
+const PILLAR_GROW: f32 = 0.6;
+const PILLAR_GROW_ENDS: f32 = 1.4;
+
+fn grow_pillar(mesh: &Mesh) -> Option<Mesh> {
+    if !mesh.small_closed() || mesh.radius() < 5.0 {
+        return None;
+    }
+    let v = mesh.tris().iter().flatten();
     let lo = v.clone().fold(Vec3::splat(f32::MAX), |a, b| a.min(*b));
     let hi = v.fold(Vec3::splat(f32::MIN), |a, b| a.max(*b));
-    let size = hi - lo;
-    let mid = (lo + hi) / 2.0;
-    for (axis, other) in [(0, 2), (2, 0)] {
-        if size[axis] < THIN && size[other] > 1.0 && size[1] > 1.0 {
-            for p in tris.iter_mut().flatten() {
-                p[axis] = if p[axis] > mid[axis] { mid[axis] + THICK_WALL / 2.0 } else { mid[axis] - THICK_WALL / 2.0 };
-            }
-            return true;
-        }
+    // a pillar stands taller than it is wide (a lowered bridge is a lift too, but flat)
+    if hi.y - lo.y < (hi.x - lo.x).max(hi.z - lo.z) {
+        return None;
     }
-    false
+    let mid = (lo + hi) / 2.0;
+    let short = if hi.x - lo.x < hi.z - lo.z { 0 } else { 2 };
+    let tris = mesh.tris().iter().map(|t| t.map(|p| {
+        let mut p = p;
+        for axis in [0, 2] {
+            let grow = if axis == short { PILLAR_GROW_ENDS } else { PILLAR_GROW };
+            p[axis] += if p[axis] > mid[axis] { grow } else { -grow };
+        }
+        p
+    })).collect();
+    Some(Mesh::new(tris))
 }
-
-const THICK_WALL: f32 = 1.2;
 
 /// Breakable things near `center`: (body index, origin, layer). Physics props (layer 0x1e: loose
 /// barrels, pots) have their origin at the centre of mass; map assets (0x3a: crates and barrels
@@ -527,7 +612,8 @@ impl HavokCollision {
     /// Current active body -> world transform.
     pub fn transform(&self, i: u32) -> Option<(Vec3, Quat)> {
         let body = self.body(i)?;
-        let q = Quat::from_xyzw(f32_at(body + 0x80), f32_at(body + 0x84), f32_at(body + 0x88), f32_at(body + 0x8c)).conjugate();
+        let q = body_rotation(body)
+            .unwrap_or_else(|| Quat::from_xyzw(f32_at(body + 0x80), f32_at(body + 0x84), f32_at(body + 0x88), f32_at(body + 0x8c)).conjugate());
         let p = vec3_at(body + 0x30);
         let norm = q.length_squared();
         (p.is_finite() && q.is_finite() && norm.is_finite() && norm > 0.5).then(|| (p, q.normalize()))
@@ -566,31 +652,106 @@ impl HavokCollision {
         Self { layers, ..Default::default() }
     }
 
-    /// If `p` is inside a thickened wall (a fog gate he just went through), the point just
-    /// outside it on the side `p` is on.
-    pub fn out_of_thick_wall(&self, p: Vec3) -> Option<Vec3> {
+    /// Debug: every body within `range` metres (horizontally) of `p`: layer, class, flags, triangle
+    /// count, whether the last query used it, and the box it covers in the world.
+    pub fn bodies_around(&self, p: Vec3, range: f32) -> Vec<String> {
+        let mut out = Vec::new();
         for i in 0..self.body_count {
             let body = self.bodies + i * 0xb0;
             let shape = unsafe { *((body + 0x60) as *const usize) };
-            if !self.thick.contains(&shape) || u32_at(body + 0x78) == u32::MAX {
+            if shape == 0 {
                 continue;
             }
-            let Some((_, Some(mesh))) = self.convex.get(&shape) else { continue };
-            let Some((t, q)) = self.transform(i as u32) else { continue };
-            let v = mesh.tris().iter().flatten();
-            let lo = v.clone().fold(Vec3::splat(f32::MAX), |a, b| a.min(*b));
-            let hi = v.fold(Vec3::splat(f32::MIN), |a, b| a.max(*b));
-            let mut l = q.inverse() * (p - t);
-            if l.cmplt(lo - Vec3::Y * 0.5).any() || l.cmpgt(hi).any() {
+            let t = vec3_at(body + 0x30);
+            if !t.is_finite() || t.distance(p) > 60.0 {
                 continue;
             }
-            let axis = if hi.x - lo.x < hi.z - lo.z { 0 } else { 2 };
-            let mid = (lo[axis] + hi[axis]) / 2.0;
-            l[axis] = if l[axis] > mid { hi[axis] + 0.1 } else { lo[axis] - 0.1 };
-            return Some(q * l + t);
+            let class = class_of(shape).unwrap_or_default();
+            if class.contains("Capsule") {
+                continue;
+            }
+            let mesh = self.meshes.get(&shape).and_then(|m| m.2.clone()).or_else(|| self.convex.get(&shape).and_then(|c| c.1.clone()));
+            let aabb = mesh.as_ref().zip(self.transform(i as u32)).map(|(m, (t, q))| {
+                let v = m.tris().iter().flatten().map(|v| q * *v + t);
+                (v.clone().fold(Vec3::splat(f32::MAX), |a, b| a.min(b)), v.fold(Vec3::splat(f32::MIN), |a, b| a.max(b)))
+            });
+            // decoded: its box reaches within `range`; not decoded: origin within 40 m
+            let near = match aabb {
+                Some((lo, hi)) => (p.clamp(lo, hi) - p).length() <= range,
+                None => t.distance(p) <= 40.0,
+            };
+            if !near {
+                continue;
+            }
+            let bounds = aabb.map(|(lo, hi)| format!("x {:.2}..{:.2} y {:.2}..{:.2} z {:.2}..{:.2}", lo.x, hi.x, lo.y, hi.y, lo.z, hi.z));
+            let raw = Quat::from_xyzw(f32_at(body + 0x80), f32_at(body + 0x84), f32_at(body + 0x88), f32_at(body + 0x8c)).conjugate();
+            let used = self.transform(i as u32).map(|(_, q)| q);
+            out.push(format!(
+                "  body #{i} L{:#x} {class} flags {:#x} bp {:#x} at {t:.2?} +0x80 rot {raw:.3?} used {used:.3?}: {} tris, used {}, {}",
+                u32_at(body + 0x6c), u32_at(body + 0x68), u32_at(body + 0x78),
+                mesh.as_ref().map_or(0, |m| m.tris().len()), self.last_bodies.contains(&(i as u32)),
+                bounds.unwrap_or_else(|| "not decoded".into())
+            ));
+            // an undecoded compressed mesh: what's cached for it, and which header pointer decodes
+            if mesh.is_none() && class.contains("CompressedMeshShape") && readable(shape, 0xa0) {
+                out.push(format!("    cache {:?}", self.meshes.get(&shape).map(|(md, n, m)| (format!("{md:#x}"), *n, m.is_some()))));
+                let list = read_u64(shape + 0x70).unwrap_or(0) as usize;
+                let n = (u32_at(shape + 0x78) as usize).min(8);
+                let kinds: Vec<String> = (0..n).filter(|_| readable(list, n * 0x70)).map(|k| {
+                    let piece = unsafe { *((list + k * 0x70 + 0x50) as *const usize) };
+                    format!("{:?}", readable(piece, 0x50).then(|| class_of(piece)).flatten())
+                }).collect();
+                out.push(format!("    pieces +0x70: count {} first kinds {kinds:?}, decoded {:?}", u32_at(shape + 0x78), decode_custom_pieces(shape).map(|t| t.len())));
+                // raw words, to find where the custom pieces live (first such body only: it's long)
+                static DUMPED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+                if DUMPED.swap(shape, std::sync::atomic::Ordering::Relaxed) != shape && decode_custom_pieces(shape).is_none() {
+                    let words = |a: usize, len: usize| -> String {
+                        (0..len).step_by(8).filter(|o| readable(a + o, 8)).map(|o| format!("{:016x}", unsafe { *((a + o) as *const u64) })).collect::<Vec<_>>().join(" ")
+                    };
+                    out.push(format!("    shape {shape:#x} [0..0xc0]: {}", words(shape, 0xc0)));
+                    for off in [0x50usize, 0x70] {
+                        let a = read_u64(shape + off).unwrap_or(0) as usize;
+                        if a > 0x10000 && readable(a, 0x80) {
+                            out.push(format!("    +{off:#x} -> {a:#x} [0..0x80]: {}", words(a, 0x80)));
+                        }
+                    }
+                    let md = unsafe { *((shape + 0x48) as *const usize) };
+                    if readable(md, 0x180) {
+                        out.push(format!("    data {md:#x} [0..0x180]: {}", words(md, 0x180)));
+                        for (name, off, elem) in [("sections", 0x60usize, 0x60usize), ("prims", 0x70, 4), ("shared idx", 0x80, 2), ("packed", 0x90, 4), ("shared", 0xa0, 8), ("+0xb0", 0xb0, 8), ("+0xc0", 0xc0, 8)] {
+                            let a = read_u64(md + off).unwrap_or(0) as usize;
+                            let n = u32_at(md + off + 8) as usize;
+                            if a > 0x10000 && n > 0 && n < 4096 && readable(a, (n * elem).min(0x100)) {
+                                out.push(format!("    {name} [{n}] at {a:#x}: {}", words(a, (n * elem).min(0x100).max(8))));
+                            }
+                        }
+                    }
+                }
+                let md = unsafe { *((shape + 0x48) as *const usize) };
+                if readable(md, 0xb0) {
+                    let n = u32_at(md + 0x78) as usize;
+                    let prims = read_u64(md + 0x70).unwrap_or(0) as usize;
+                    let custom = (prims != 0 && readable(prims, n * 4)).then(|| (0..n).filter(|k| unsafe { *((prims + k * 4) as *const u8) == *((prims + k * 4 + 1) as *const u8) }).count());
+                    out.push(format!(
+                        "    data: {n} prims ({custom:?} custom), {} sections, box {:.2?}..{:.2?}",
+                        u32_at(md + 0x68), vec3_at(md + 0x30), vec3_at(md + 0x40)
+                    ));
+                }
+                for off in (0x08..0xa0).step_by(8) {
+                    let md = unsafe { *((shape + off) as *const usize) };
+                    if md < 0x10000 || !readable(md, 0xb0) {
+                        continue;
+                    }
+                    out.push(format!(
+                        "    shape +{off:#x} -> {md:#x}: decode {:?}, pieces box {:?}",
+                        decode(md).map(|t| t.len()), custom_pieces_box(md).map(|t| t.len())
+                    ));
+                }
+            }
         }
-        None
+        out
     }
+
 
     /// World-space (Havok) triangles near `center` from all allowed bodies.
     pub fn query(&mut self, center: Vec3) -> Option<Vec<(Tri, u32, u32)>> {
@@ -617,9 +778,8 @@ impl HavokCollision {
             }
             let layer = u32_at(body + 0x6c);
             let t = vec3_at(body + 0x30);
-            // the stored quaternion maps world -> body space; we need body -> world (verified: 1319/1327
-            // ground-truth points within 2 cm with the inverse vs 504 without)
-            let q = Quat::from_xyzw(f32_at(body + 0x80), f32_at(body + 0x84), f32_at(body + 0x88), f32_at(body + 0x8c)).conjugate();
+            let q = body_rotation(body)
+                .unwrap_or_else(|| Quat::from_xyzw(f32_at(body + 0x80), f32_at(body + 0x84), f32_at(body + 0x88), f32_at(body + 0x8c)).conjugate());
             // skip layers we don't want before touching the shape
             if !self.layers.is_empty() && !self.layers.contains(&(layer & 0xff)) {
                 *seen_layers.entry(layer).or_default() += 1;
@@ -631,6 +791,10 @@ impl HavokCollision {
                 self.not_in_world += 1;
                 continue;
             }
+            if !q.is_finite() || q.length_squared() < 0.5 {
+                continue;
+            }
+            let q = q.normalize();
             n_layer_ok += 1;
             // shapes get freed and re-allocated as the world streams: validate the cache entry
             // unknown shapes (and stale pointers in unused body slots) get one real memory check,
@@ -668,21 +832,32 @@ impl HavokCollision {
                     }
                     let cls = class_of(shape).unwrap_or_default();
                     if cls.contains("ConvexPolytopeShape") || cls.contains("BoxShape") || cls.contains("CylinderShape") {
-                        let mut tris = decode_convex(shape).filter(|t| !t.is_empty());
-                        if cls.contains("BoxShape") && tris.as_mut().is_some_and(|t| thicken_thin_wall(t)) {
-                            self.thick.insert(shape);
-                        }
-                        let m = tris.map(|t| Arc::new(Mesh::new(t)));
+                        let m = decode_convex(shape).filter(|t| !t.is_empty()).map(|t| Arc::new(Mesh::new(t)));
                         self.meshes.remove(&shape);
                         self.convex.insert(shape, (vtable, m.clone()));
                         m
                     } else {
                     let tris = if cls.contains("CompressedMeshShape") {
                         decode(md).filter(|t| !t.is_empty()).or_else(|| {
+                            let pieces = decode_custom_pieces(shape);
+                            if let Some(p) = &pieces {
+                                crate::dlog(format!("collision: body {i} (layer {layer:#x}) is custom pieces: {} triangles from its convex pieces", p.len()));
+                            }
+                            pieces
+                        }).or_else(|| {
                             let b = custom_pieces_box(md);
                             if b.is_some() {
                                 self.boxed.insert(shape);
                                 log(format!("collision: body {i} (layer {layer:#x}) is custom pieces only: using its box"));
+                                if let Some(b) = b.as_ref() {
+                                    let v = b.iter().flatten();
+                                    let lo = v.clone().fold(Vec3::splat(f32::MAX), |a, c| a.min(*c));
+                                    let hi = v.fold(Vec3::splat(f32::MIN), |a, c| a.max(*c));
+                                    crate::dlog(format!(
+                                        "  body {i} at {t:.2?} rot {q:.3?} flags {:#x} bp {:#x}: local box {lo:.2?}..{hi:.2?} (centre {:.2?})",
+                                        u32_at(body + 0x68), u32_at(body + 0x78), (lo + hi) / 2.0
+                                    ));
+                                }
                             }
                             b
                         })
@@ -691,7 +866,14 @@ impl HavokCollision {
                     } else {
                         None
                     };
-                    let m = tris.filter(|t| !t.is_empty()).map(|t| Arc::new(Mesh::new(t)));
+                    let mut m = tris.filter(|t| !t.is_empty()).map(|t| Arc::new(Mesh::new(t)));
+                    // a lift pillar: grown out so Mario can't stand over the gap around it
+                    let lift = matches!(u32_at(body + 0x68) & 0xff, 0x02 | 0x03);
+                    if let Some(grown) = m.as_ref().filter(|_| lift).and_then(|m| grow_pillar(m)) {
+                        crate::dlog(format!("collision: body {i} (layer {layer:#x}) is a lift pillar, grown by {PILLAR_GROW} m"));
+                        self.boxed.insert(shape);
+                        m = Some(Arc::new(grown));
+                    }
                     let n = if md != 0 && readable(md + 0x70, 16) { u32_at(md + 0x78) } else { 0 };
                     self.meshes.insert(shape, (md, n, m.clone()));
                     m
@@ -780,20 +962,6 @@ impl HavokCollision {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn thin_upright_box_gets_thick() {
-        let (lo, hi) = (Vec3::new(-7.5, 0.0, -0.07), Vec3::new(7.5, 8.3, 0.07));
-        let c = |x: bool, y: bool, z: bool| Vec3::new(if x { hi.x } else { lo.x }, if y { hi.y } else { lo.y }, if z { hi.z } else { lo.z });
-        let mut tris = vec![[c(false, false, false), c(true, false, false), c(true, true, true)], [c(false, true, true), c(true, true, false), c(false, false, true)]];
-        assert!(thicken_thin_wall(&mut tris));
-        assert!(tris.iter().flatten().all(|v| (v.z.abs() - THICK_WALL / 2.0).abs() < 1e-5));
-        // a thin floor plank stays as it is
-        let mut plank = vec![[Vec3::ZERO, Vec3::new(2.0, 0.05, 0.0), Vec3::new(0.0, 0.0, 2.0)]];
-        let before = plank.clone();
-        assert!(!thicken_thin_wall(&mut plank));
-        assert_eq!(plank, before);
-    }
 
     #[test]
     fn tracked_body_reads_reject_removed_and_reused_slots() {

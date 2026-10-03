@@ -25,6 +25,7 @@ mod addon_hitboxes;
 mod collision_geometry;
 mod throw_collision;
 mod names;
+mod notes;
 mod paths;
 mod sm64;
 mod skate;
@@ -70,8 +71,10 @@ use windows::core::{PCSTR, w};
 
 /// Metres per SM64 unit (Mario is ~160 units tall, so ~1.6 m).
 pub(crate) const SCALE: f32 = 0.01;
+/// The game's floor material id for lava (ChrPhysicsMaterialInfo::hit_material).
+const LAVA_MATERIAL: i32 = 7;
 /// Havok collision layers Mario collides with (terrain, buildings, props, ...).
-const COLLISION_LAYERS: [u32; 9] = [0x1e, 0x37, 0x38, 0x39, 0x3a, 0x47, 0x48, 0x49, 0x51];
+const COLLISION_LAYERS: [u32; 11] = [0x1e, 0x2e, 0x37, 0x38, 0x39, 0x3a, 0x46, 0x47, 0x48, 0x49, 0x51];
 /// Raycast filter for the ground probes.
 const RAY_FILTER: u32 = 0x08;
 /// Lifts Mario 1 m (out of places he's stuck in).
@@ -588,6 +591,10 @@ fn startup() {
     let build = assets::check();
     log(format!("mod folder {}", paths::mod_dir().display()));
     update::start();
+    // (not on the setup launch: the game is closed right after it)
+    if !build {
+        notes::start();
+    }
     if build {
         hud::setup_progress("Setting up ER Mario", 0.0, "Reading the ROM");
     }
@@ -802,7 +809,7 @@ fn havok_surfaces(h: &mut havok_col::HavokCollision, origin: [f32; 3], mario: [f
     }
     let mut centers = std::collections::HashMap::new();
     for (t, layer, body) in &tris {
-        let mid = if h.is_convex(*body) || h.is_boxed(*body) {
+        let mid = if h.is_convex(*body) || h.is_boxed(*body) || h.mesh_of(*body).is_some_and(|m| m.small_closed()) {
             *centers.entry(*body).or_insert_with(|| {
                 let mesh = h.mesh_of(*body)?;
                 let (p, q) = h.transform(*body)?;
@@ -819,7 +826,82 @@ fn havok_surfaces(h: &mut havok_col::HavokCollision, origin: [f32; 3], mario: [f
         surf.force = *layer as i16;
         out.push(surf);
     }
+    // moving objects (a lift's floor) are surface objects, not in `out`: no patches under them
+    let moving: Vec<(glam::Vec3, glam::Vec3)> = h
+        .exclude
+        .iter()
+        .filter_map(|&i| {
+            let (mesh, (t, q)) = (h.mesh_of(i)?, h.transform(i)?);
+            let v = mesh.tris().iter().flatten().map(|v| q * *v + t);
+            let lo = v.clone().fold(glam::Vec3::splat(f32::MAX), |a, b| a.min(b));
+            let hi = v.fold(glam::Vec3::splat(f32::MIN), |a, b| a.max(b));
+            Some((lo - glam::Vec3::splat(0.5), hi + glam::Vec3::splat(0.5)))
+        })
+        .collect();
+    floor_patches(&mut out, origin, mario, player, &moving);
     Some(out)
+}
+
+/// Floors the game's map ray finds around Mario that our collision is missing (meshes built from
+/// custom pieces, like the Volcano Manor drawbridge, can't be decoded): a small flat patch there.
+/// Not inside `moving` (world boxes of the moving objects): a patch under a lift's floor stayed
+/// behind when it went down, and Mario stood on it while the cage's roof came through him.
+fn floor_patches(out: &mut Vec<sm64::SM64Surface>, origin: [f32; 3], mario: [f32; 3], player: &PlayerIns, moving: &[(glam::Vec3, glam::Vec3)]) {
+    // grid around Mario (SM64 units) and how far up/down the ray looks (metres)
+    const STEP: f32 = 75.0;
+    const HALF: i32 = 4;
+    let Ok(havok) = (unsafe { eldenring::cs::CSHavokMan::instance() }) else { return };
+    let floors: Vec<[glam::Vec3; 3]> = out
+        .iter()
+        .filter(|s| !collision::is_wall(s))
+        .map(|s| s.vertices.map(|p| glam::Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32)))
+        .filter(|t| (t[1] - t[0]).cross(t[2] - t[1]).y > 0.0)
+        .collect();
+    // floor heights of our own collision at (x, z)
+    let ours = |x: f32, z: f32| {
+        floors.iter().filter_map(move |t| {
+            let p = glam::Vec2::new(x, z);
+            let [a, b, c] = t.map(|v| glam::Vec2::new(v.x, v.z));
+            let d = (b - a).perp_dot(c - a);
+            if d.abs() < 1e-3 {
+                return None;
+            }
+            let u = (b - p).perp_dot(c - p) / d;
+            let v = (c - p).perp_dot(a - p) / d;
+            let w = 1.0 - u - v;
+            (u >= -0.01 && v >= -0.01 && w >= -0.01).then(|| t[0].y * u + t[1].y * v + t[2].y * w)
+        })
+    };
+    let mut added = 0;
+    for gx in -HALF..=HALF {
+        for gz in -HALF..=HALF {
+            let (x, z) = (mario[0] + gx as f32 * STEP, mario[2] + gz as f32 * STEP);
+            let top = collision::sm_to_er(origin, [x, mario[1] + 200.0, z]);
+            let Some(hit) = havok.phys_world.cast_ray(RAY_FILTER, &top, eldenring::position::PositionDelta(0.0, -8.0, 0.0), player) else { continue };
+            let at = glam::Vec3::new(hit.0, hit.1, hit.2);
+            if moving.iter().any(|(lo, hi)| at.cmpge(*lo).all() && at.cmple(*hi).all()) {
+                continue;
+            }
+            let y = collision::er_to_sm(origin, &HavokPosition(hit.0, hit.1, hit.2, 0.0))[1];
+            if ours(x, z).any(|h| (h - y).abs() < 40.0) {
+                continue;
+            }
+            let r = STEP / 2.0 + 5.0;
+            let q = |dx: f32, dz: f32| [(x + dx).round() as i32, y.round() as i32, (z + dz).round() as i32];
+            // two triangles facing up (the facing is settled like any other floor)
+            for v in [[q(-r, -r), q(r, -r), q(r, r)], [q(-r, -r), q(r, r), q(-r, r)]] {
+                if let Some(v) = collision_geometry::surface_vertices(v, None, Some(mario)) {
+                    let mut surf = sm64::SM64Surface::grass(v);
+                    surf.force = 0xfe;
+                    out.push(surf);
+                }
+            }
+            added += 1;
+        }
+    }
+    if added > 0 {
+        crate::dlog(format!("floor patches: {added} from the game's map ray"));
+    }
 }
 
 /// Which eye texture SM64 is drawing (cells 5 open, 6 half, 7 closed, 8 dead): the median
@@ -835,6 +917,33 @@ fn eye_cell(uv: &[f32], used: usize) -> u8 {
         .collect();
     eyes.sort_by(f32::total_cmp);
     eyes.get(eyes.len() / 2).map(|m| (m * 11.0) as u8).unwrap_or(5)
+}
+
+/// Debug: a loaded wall Mario's centre crossed front to back between two ticks (at his wall check
+/// heights), with his distance to it before and after.
+fn crossed_wall(surfaces: &[sm64::SM64Surface], a: [f32; 3], b: [f32; 3]) -> Option<(sm64::SM64Surface, f32, f32)> {
+    for s in surfaces.iter().filter(|s| collision::is_wall(s)) {
+        let [p0, p1, p2] = s.vertices.map(|p| glam::Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32));
+        let n = (p1 - p0).cross(p2 - p1);
+        if n.length_squared() < 1e-6 {
+            continue;
+        }
+        let n = n.normalize();
+        for h in [30.0, 60.0] {
+            let (pa, pb) = (glam::Vec3::new(a[0], a[1] + h, a[2]), glam::Vec3::new(b[0], b[1] + h, b[2]));
+            let (da, db) = (n.dot(pa - p0), n.dot(pb - p0));
+            if da <= 0.0 || db >= 0.0 {
+                continue;
+            }
+            // where the move crosses the plane: inside the triangle?
+            let x = pa + (pb - pa) * (da / (da - db));
+            let inside = [(p0, p1), (p1, p2), (p2, p0)].iter().all(|(u, v)| n.dot((*v - *u).cross(x - *u)) >= -1.0);
+            if inside {
+                return Some((*s, da, db));
+            }
+        }
+    }
+    None
 }
 
 fn load_surfaces(surfaces: &[sm64::SM64Surface]) {
@@ -1002,7 +1111,8 @@ static IN_WORLD: AtomicBool = AtomicBool::new(false);
 /// Whether the player is in the world (not the title screen, a menu before loading, or a load).
 pub(crate) fn in_world() -> bool {
     IN_WORLD.load(Ordering::Relaxed)
-}/// The loadout from before Mario mode (restored when it's switched off; kept across respawns).
+}
+/// The loadout from before Mario mode (restored when it's switched off; kept across respawns).
 static SAVED_LOADOUT: Mutex<Option<equip::Loadout>> = Mutex::new(None);
 /// Loadout to put back shortly after Mario mode ended (after the model reload).
 static PENDING_RESTORE: Mutex<Option<(std::time::Instant, equip::Loadout)>> = Mutex::new(None);
@@ -1076,7 +1186,13 @@ fn input_task() {
         MENU_OPEN.store(false, Ordering::Relaxed);
     }
     GAME_MENU.store(game_menu, Ordering::Relaxed);
-    let inferred_menu = input_policy::infer_menu(menu, routed, opener, pressed, right_trigger, ap_cappy::visual().enabled);
+    // Only a fresh game-owned press can infer a menu opening. A held crouch
+    // does not route on every frame; addon-owned RT must remain excluded.
+    static HELD: AtomicBool = AtomicBool::new(false);
+    let mut held = HELD.load(Ordering::Relaxed);
+    let inferred_menu = input_policy::infer_menu_fresh(menu, routed, opener,
+        pressed, right_trigger, ap_cappy::visual().enabled, &mut held);
+    HELD.store(held, Ordering::Relaxed);
     if opener {
         if !menu {
             log("input: menu opened");
@@ -1168,6 +1284,13 @@ impl Drop for DrawTimer {
 fn frame(data: &FD4TaskData) {
     FLASK_ALLOWED.store(false, Ordering::Relaxed);
     lakitu::TARGET_LOCKED.store(false, Ordering::Relaxed);
+    // outside Mario mode the Tarnished dies like anyone (the flag is set further down, while
+    // Mario is alive)
+    if !ENABLED.load(Ordering::Relaxed) {
+        if let Ok(flags) = unsafe { eldenring::cs::WorldChrManDbgFlags::instance_mut() } {
+            flags.player_no_dead = false;
+        }
+    }
     {
         let mut p = PERF.lock().unwrap_or_else(|e| e.into_inner());
         p.frames += 1;
@@ -1341,6 +1464,14 @@ fn frame(data: &FD4TaskData) {
         }
         if last != a && debug() {
             crate::dlog(format!("tarnished anim -> {a}"));
+        }
+        // debug: what the Tarnished stands on (to learn material ids, e.g. lava)
+        if debug() {
+            static LAST_MATERIAL: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(i32::MIN);
+            let material = player.chr_ins.modules.physics.material_info.hit_material;
+            if LAST_MATERIAL.swap(material, Ordering::Relaxed) != material {
+                log(format!("floor material -> {material} (material param {})", player.chr_ins.modules.material.material_param_id));
+            }
         }
     }
     static FALL_OVERRIDDEN: AtomicBool = AtomicBool::new(false);
@@ -2084,6 +2215,12 @@ fn frame(data: &FD4TaskData) {
         no_stomp.extend(targets.iter().enumerate().filter(|(_, t)| t.is_prop()).map(|(i, _)| i));
         let target_pos: Vec<([f32; 3], f32, f32, usize)> = targets.iter().enumerate().map(|(i, t)| (t.sm, t.radius, t.height, i)).collect();
         // SM64's health is Mario's: Elden Ring hits cost wedges, and the Tarnished's HP is kept full
+        // (a hit bigger than his whole HP would still kill him outright, a low-level character
+        // against a late boss: the game's own "player can't die" flag stops him at 1 HP, and it
+        // comes off when Mario himself is out of health, since his death is the Tarnished's)
+        if let Ok(flags) = unsafe { eldenring::cs::WorldChrManDbgFlags::instance_mut() } {
+            flags.player_no_dead = !m.dead;
+        }
         let hurt = {
             let data = &player_ref.chr_ins.modules.data;
             // the enemy Mario holds (a boss by the tail, or a picked-up enemy) and one he just threw
@@ -2094,11 +2231,20 @@ fn frame(data: &FD4TaskData) {
             let damaged = m.combat.took_damage(data.hp, data.max_hp);
             let was_damaged = damaged.is_some();
             let from_held = was_damaged && (carry::harmless(here) || swing::harmless(here));
-            let hurt = damaged.filter(|_| !m.dead && !from_held);
+            // the game's own lava damage: Mario already pays for lava with SM64's lava boost
+            // (also for a moment after: the burn keeps ticking while he's bounced up)
+            static ON_LAVA: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+            let mut on_lava = ON_LAVA.lock().unwrap_or_else(|e| e.into_inner());
+            if player_ref.chr_ins.modules.physics.material_info.hit_material == LAVA_MATERIAL {
+                *on_lava = Some(std::time::Instant::now());
+            }
+            let from_lava = on_lava.is_some_and(|t| t.elapsed().as_secs_f32() < 1.0);
+            drop(on_lava);
+            let hurt = damaged.filter(|_| !m.dead && !from_held && !from_lava);
             if debug() && was_damaged {
                 log(format!(
                     "hurt: {} (last carried {:#x}), hp {} of {}, mario action {:#x}",
-                    if from_held { "ignored, from the enemy Mario holds or threw" } else { "taken" },
+                    if from_held { "ignored, from the enemy Mario holds or threw" } else if from_lava { "ignored, the game's lava damage" } else { "taken" },
                     carry::last_mob_key(),
                     data.hp,
                     data.max_hp,
@@ -2193,7 +2339,12 @@ fn frame(data: &FD4TaskData) {
         }
         let stuck_at = m.state.position;
         let tt = std::time::Instant::now();
+        // lava under the Tarnished (he stands where Mario does): SM64's lava boost
+        let lava = player_ref.chr_ins.modules.physics.material_info.hit_material == LAVA_MATERIAL;
         let result = worker::call("tick", move |ctx| {
+            if lava {
+                unsafe { sm64::sm64_er_lava(id) };
+            }
             if unstick {
                 // a floor just above his feet means he sank into it: put him on top
                 let [x, y, z] = stuck_at;
@@ -2342,6 +2493,16 @@ fn frame(data: &FD4TaskData) {
                     addon_damage.append(&mut hits);
                     hits = addon_damage;
                 } else { m.addon_hits.reset(); }
+                // debug: Mario's centre crossing a loaded wall front to back in one tick
+                let step = glam::Vec3::from(state.position) - glam::Vec3::from(m.state.position);
+                if debug() && !FOLLOWING.load(Ordering::Relaxed) && step.length() < 200.0 {
+                    if let Some((wall, da, db)) = crossed_wall(&m.surfaces, m.state.position, state.position) {
+                        log(format!(
+                            "through a wall: action {:#x} fwd vel {:.1} moved {:.1}, distance {da:.1} -> {db:.1}, layer {:#x}",
+                            state.action, state.forward_velocity, step.length(), wall.force
+                        ));
+                    }
+                }
                 m.combat.deal(&player_ref.chr_ins, &targets, &hits, m.ticks);
                 m.prev_parts = m.parts.take();
                 m.parts = parts;
@@ -2492,14 +2653,6 @@ fn frame(data: &FD4TaskData) {
                 // the real collision again, with a floor under his feet for a moment (the area past
                 // a fog wall may still be loading in)
                 m.last_query = None;
-                // through a fog gate: he ends up inside its thickened wall, put him out on his side
-                let e = collision::sm_to_er(m.origin, m.state.position);
-                if let Some(out) = m.havok.out_of_thick_wall(glam::Vec3::new(e.0, e.1, e.2)) {
-                    let sm = collision::er_to_sm(m.origin, &HavokPosition(out.x, out.y, out.z, 0.0));
-                    log(format!("follow: Mario was inside a fog gate's wall, moved out to {sm:?}"));
-                    set_mario_position(m.id, sm);
-                    m.state.position = sm;
-                }
                 *FOLLOW_ENDED.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), m.state.position));
             }
         }
@@ -2709,6 +2862,10 @@ fn frame(data: &FD4TaskData) {
                 log(format!("F5 probe: game ray (filter {:#x}) hits {:?}", m.filter, hit.map(|h| h.1)));
             }
             for line in m.havok.probe(p) {
+                log(line);
+            }
+            log("F5 bodies around Mario (6 m):");
+            for line in m.havok.bodies_around(p, 6.0) {
                 log(line);
             }
             for line in m.moving.describe(&m.havok, m.origin, m.state.position) {
