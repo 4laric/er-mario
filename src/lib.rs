@@ -1406,6 +1406,14 @@ fn frame(data: &FD4TaskData) {
         if last != a && debug() {
             crate::dlog(format!("tarnished anim -> {a}"));
         }
+        // debug: what the Tarnished stands on (to learn material ids, e.g. lava)
+        if debug() {
+            static LAST_MATERIAL: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(i32::MIN);
+            let material = player.chr_ins.modules.physics.material_info.hit_material;
+            if LAST_MATERIAL.swap(material, Ordering::Relaxed) != material {
+                log(format!("floor material -> {material} (material param {})", player.chr_ins.modules.material.material_param_id));
+            }
+        }
     }
     static FALL_OVERRIDDEN: AtomicBool = AtomicBool::new(false);
     if ENABLED.load(Ordering::Relaxed) && !HANDS_OFF.load(Ordering::Relaxed) {
@@ -2059,11 +2067,20 @@ fn frame(data: &FD4TaskData) {
             let damaged = m.combat.took_damage(data.hp, data.max_hp);
             let was_damaged = damaged.is_some();
             let from_held = was_damaged && (carry::harmless(here) || swing::harmless(here));
-            let hurt = damaged.filter(|_| !m.dead && !from_held);
+            // the game's own lava damage: Mario already pays for lava with SM64's lava boost
+            // (also for a moment after: the burn keeps ticking while he's bounced up)
+            static ON_LAVA: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+            let mut on_lava = ON_LAVA.lock().unwrap_or_else(|e| e.into_inner());
+            if player_ref.chr_ins.modules.physics.material_info.hit_material == LAVA_MATERIAL {
+                *on_lava = Some(std::time::Instant::now());
+            }
+            let from_lava = on_lava.is_some_and(|t| t.elapsed().as_secs_f32() < 1.0);
+            drop(on_lava);
+            let hurt = damaged.filter(|_| !m.dead && !from_held && !from_lava);
             if debug() && was_damaged {
                 log(format!(
                     "hurt: {} (last carried {:#x}), hp {} of {}, mario action {:#x}",
-                    if from_held { "ignored, from the enemy Mario holds or threw" } else { "taken" },
+                    if from_held { "ignored, from the enemy Mario holds or threw" } else if from_lava { "ignored, the game's lava damage" } else { "taken" },
                     carry::last_mob_key(),
                     data.hp,
                     data.max_hp,
@@ -2154,7 +2171,12 @@ fn frame(data: &FD4TaskData) {
         }
         let stuck_at = m.state.position;
         let tt = std::time::Instant::now();
+        // lava under the Tarnished (he stands where Mario does): SM64's lava boost
+        let lava = player_ref.chr_ins.modules.physics.material_info.hit_material == LAVA_MATERIAL;
         let result = worker::call("tick", move |ctx| {
+            if lava {
+                unsafe { sm64::sm64_er_lava(id) };
+            }
             if unstick {
                 // a floor just above his feet means he sank into it: put him on top
                 let [x, y, z] = stuck_at;
