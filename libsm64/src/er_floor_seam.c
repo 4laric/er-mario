@@ -25,6 +25,7 @@ int er_floor_seam_has_flat_support(struct MarioState *m) {
             || floor->normal.y < 0.9659258f) return 0;
         struct MarioState sample = *m;
         sample.floor = floor;
+        sample.curTerrain = floor->terrain;
         if (mario_get_floor_class(&sample) != SURFACE_CLASS_DEFAULT) return 0;
     }
     return 1;

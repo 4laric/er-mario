@@ -65,6 +65,9 @@ int main(void) {
     m=scene(3,3,-3,3);triangles[4].type=triangles[5].type=SURFACE_SLIPPERY;
     surfaces_load_static(triangles,6);m.floorHeight=find_floor(0,0,0,&m.floor);
     assert(!er_floor_seam_has_flat_support(&m)); /* Slippery adjacent support. */
+    m=scene(3,3,-3,3);triangles[4].terrain=triangles[5].terrain=TERRAIN_SLIDE;
+    surfaces_load_static(triangles,6);m.floorHeight=find_floor(0,0,0,&m.floor);
+    assert(!er_floor_seam_has_flat_support(&m)); /* Slide terrain adjacent support. */
     m=scene(3,3,-3,3);m.action=ACT_FREEFALL;assert(!er_floor_seam_has_flat_support(&m));
     m=scene(3,3,-3,3);m.pos[1]=6;assert(!er_floor_seam_has_flat_support(&m));
     m=scene(3,3,-3,3);m.floor=NULL;assert(!er_floor_seam_has_flat_support(&m));
