@@ -21,6 +21,7 @@ mod moving;
 mod collision_geometry;
 mod throw_collision;
 mod names;
+mod notes;
 mod paths;
 mod sm64;
 mod swing;
@@ -557,6 +558,10 @@ fn startup() {
     let build = assets::check();
     log(format!("mod folder {}", paths::mod_dir().display()));
     update::start();
+    // (not on the setup launch: the game is closed right after it)
+    if !build {
+        notes::start();
+    }
     if build {
         hud::setup_progress("Setting up ER Mario", 0.0, "Reading the ROM");
     }
