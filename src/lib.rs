@@ -1062,12 +1062,18 @@ fn input_task() {
         MENU_OPEN.store(false, Ordering::Relaxed);
     }
     GAME_MENU.store(game_menu, Ordering::Relaxed);
+    // a menu is only guessed from a fresh press: some held buttons (crouch) only reach the
+    // character on some frames, and holding one flipped between "menu" and "back in game" every
+    // few frames. Back in game takes anything held (the stick, still held after unpausing).
+    static HELD: AtomicBool = AtomicBool::new(false);
+    let fresh = pressed && !HELD.swap(pressed, Ordering::Relaxed);
+    let flip = if menu { pressed && routed } else { fresh && !routed };
     if opener {
         if !menu {
             log("input: menu opened");
         }
         MENU_OPEN.store(true, Ordering::Relaxed);
-    } else if pressed && menu == routed {
+    } else if flip {
         // in a menu the game stops feeding the character; in gameplay it always does
         log(format!("input: {}", if routed { "back in game" } else { "menu/popup" }));
         MENU_OPEN.store(!routed, Ordering::Relaxed);
