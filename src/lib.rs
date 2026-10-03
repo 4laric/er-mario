@@ -55,8 +55,10 @@ use windows::core::{PCSTR, w};
 
 /// Metres per SM64 unit (Mario is ~160 units tall, so ~1.6 m).
 pub(crate) const SCALE: f32 = 0.01;
+/// The game's floor material id for lava (ChrPhysicsMaterialInfo::hit_material).
+const LAVA_MATERIAL: i32 = 7;
 /// Havok collision layers Mario collides with (terrain, buildings, props, ...).
-const COLLISION_LAYERS: [u32; 9] = [0x1e, 0x37, 0x38, 0x39, 0x3a, 0x47, 0x48, 0x49, 0x51];
+const COLLISION_LAYERS: [u32; 11] = [0x1e, 0x2e, 0x37, 0x38, 0x39, 0x3a, 0x46, 0x47, 0x48, 0x49, 0x51];
 /// Raycast filter for the ground probes.
 const RAY_FILTER: u32 = 0x08;
 /// Lifts Mario 1 m (out of places he's stuck in).
@@ -769,7 +771,7 @@ fn havok_surfaces(h: &mut havok_col::HavokCollision, origin: [f32; 3], mario: [f
     }
     let mut centers = std::collections::HashMap::new();
     for (t, layer, body) in &tris {
-        let mid = if h.is_convex(*body) || h.is_boxed(*body) {
+        let mid = if h.is_convex(*body) || h.is_boxed(*body) || h.mesh_of(*body).is_some_and(|m| m.small_closed()) {
             *centers.entry(*body).or_insert_with(|| {
                 let mesh = h.mesh_of(*body)?;
                 let (p, q) = h.transform(*body)?;
@@ -786,7 +788,82 @@ fn havok_surfaces(h: &mut havok_col::HavokCollision, origin: [f32; 3], mario: [f
         surf.force = *layer as i16;
         out.push(surf);
     }
+    // moving objects (a lift's floor) are surface objects, not in `out`: no patches under them
+    let moving: Vec<(glam::Vec3, glam::Vec3)> = h
+        .exclude
+        .iter()
+        .filter_map(|&i| {
+            let (mesh, (t, q)) = (h.mesh_of(i)?, h.transform(i)?);
+            let v = mesh.tris().iter().flatten().map(|v| q * *v + t);
+            let lo = v.clone().fold(glam::Vec3::splat(f32::MAX), |a, b| a.min(b));
+            let hi = v.fold(glam::Vec3::splat(f32::MIN), |a, b| a.max(b));
+            Some((lo - glam::Vec3::splat(0.5), hi + glam::Vec3::splat(0.5)))
+        })
+        .collect();
+    floor_patches(&mut out, origin, mario, player, &moving);
     Some(out)
+}
+
+/// Floors the game's map ray finds around Mario that our collision is missing (meshes built from
+/// custom pieces, like the Volcano Manor drawbridge, can't be decoded): a small flat patch there.
+/// Not inside `moving` (world boxes of the moving objects): a patch under a lift's floor stayed
+/// behind when it went down, and Mario stood on it while the cage's roof came through him.
+fn floor_patches(out: &mut Vec<sm64::SM64Surface>, origin: [f32; 3], mario: [f32; 3], player: &PlayerIns, moving: &[(glam::Vec3, glam::Vec3)]) {
+    // grid around Mario (SM64 units) and how far up/down the ray looks (metres)
+    const STEP: f32 = 75.0;
+    const HALF: i32 = 4;
+    let Ok(havok) = (unsafe { eldenring::cs::CSHavokMan::instance() }) else { return };
+    let floors: Vec<[glam::Vec3; 3]> = out
+        .iter()
+        .filter(|s| !collision::is_wall(s))
+        .map(|s| s.vertices.map(|p| glam::Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32)))
+        .filter(|t| (t[1] - t[0]).cross(t[2] - t[1]).y > 0.0)
+        .collect();
+    // floor heights of our own collision at (x, z)
+    let ours = |x: f32, z: f32| {
+        floors.iter().filter_map(move |t| {
+            let p = glam::Vec2::new(x, z);
+            let [a, b, c] = t.map(|v| glam::Vec2::new(v.x, v.z));
+            let d = (b - a).perp_dot(c - a);
+            if d.abs() < 1e-3 {
+                return None;
+            }
+            let u = (b - p).perp_dot(c - p) / d;
+            let v = (c - p).perp_dot(a - p) / d;
+            let w = 1.0 - u - v;
+            (u >= -0.01 && v >= -0.01 && w >= -0.01).then(|| t[0].y * u + t[1].y * v + t[2].y * w)
+        })
+    };
+    let mut added = 0;
+    for gx in -HALF..=HALF {
+        for gz in -HALF..=HALF {
+            let (x, z) = (mario[0] + gx as f32 * STEP, mario[2] + gz as f32 * STEP);
+            let top = collision::sm_to_er(origin, [x, mario[1] + 200.0, z]);
+            let Some(hit) = havok.phys_world.cast_ray(RAY_FILTER, &top, eldenring::position::PositionDelta(0.0, -8.0, 0.0), player) else { continue };
+            let at = glam::Vec3::new(hit.0, hit.1, hit.2);
+            if moving.iter().any(|(lo, hi)| at.cmpge(*lo).all() && at.cmple(*hi).all()) {
+                continue;
+            }
+            let y = collision::er_to_sm(origin, &HavokPosition(hit.0, hit.1, hit.2, 0.0))[1];
+            if ours(x, z).any(|h| (h - y).abs() < 40.0) {
+                continue;
+            }
+            let r = STEP / 2.0 + 5.0;
+            let q = |dx: f32, dz: f32| [(x + dx).round() as i32, y.round() as i32, (z + dz).round() as i32];
+            // two triangles facing up (the facing is settled like any other floor)
+            for v in [[q(-r, -r), q(r, -r), q(r, r)], [q(-r, -r), q(r, r), q(-r, r)]] {
+                if let Some(v) = collision_geometry::surface_vertices(v, None, Some(mario)) {
+                    let mut surf = sm64::SM64Surface::grass(v);
+                    surf.force = 0xfe;
+                    out.push(surf);
+                }
+            }
+            added += 1;
+        }
+    }
+    if added > 0 {
+        crate::dlog(format!("floor patches: {added} from the game's map ray"));
+    }
 }
 
 /// Which eye texture SM64 is drawing (cells 5 open, 6 half, 7 closed, 8 dead): the median
@@ -2515,6 +2592,10 @@ fn frame(data: &FD4TaskData) {
                 log(format!("F5 probe: game ray (filter {:#x}) hits {:?}", m.filter, hit.map(|h| h.1)));
             }
             for line in m.havok.probe(p) {
+                log(line);
+            }
+            log("F5 bodies around Mario (6 m):");
+            for line in m.havok.bodies_around(p, 6.0) {
                 log(line);
             }
             for line in m.moving.describe(&m.havok, m.origin, m.state.position) {
