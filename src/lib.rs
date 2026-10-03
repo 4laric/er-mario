@@ -804,6 +804,33 @@ fn eye_cell(uv: &[f32], used: usize) -> u8 {
     eyes.get(eyes.len() / 2).map(|m| (m * 11.0) as u8).unwrap_or(5)
 }
 
+/// Debug: a loaded wall Mario's centre crossed front to back between two ticks (at his wall check
+/// heights), with his distance to it before and after.
+fn crossed_wall(surfaces: &[sm64::SM64Surface], a: [f32; 3], b: [f32; 3]) -> Option<(sm64::SM64Surface, f32, f32)> {
+    for s in surfaces.iter().filter(|s| collision::is_wall(s)) {
+        let [p0, p1, p2] = s.vertices.map(|p| glam::Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32));
+        let n = (p1 - p0).cross(p2 - p1);
+        if n.length_squared() < 1e-6 {
+            continue;
+        }
+        let n = n.normalize();
+        for h in [30.0, 60.0] {
+            let (pa, pb) = (glam::Vec3::new(a[0], a[1] + h, a[2]), glam::Vec3::new(b[0], b[1] + h, b[2]));
+            let (da, db) = (n.dot(pa - p0), n.dot(pb - p0));
+            if da <= 0.0 || db >= 0.0 {
+                continue;
+            }
+            // where the move crosses the plane: inside the triangle?
+            let x = pa + (pb - pa) * (da / (da - db));
+            let inside = [(p0, p1), (p1, p2), (p2, p0)].iter().all(|(u, v)| n.dot((*v - *u).cross(x - *u)) >= -1.0);
+            if inside {
+                return Some((*s, da, db));
+            }
+        }
+    }
+    None
+}
+
 fn load_surfaces(surfaces: &[sm64::SM64Surface]) {
     let s = surfaces.to_vec();
     worker::call("load surfaces", move |_| unsafe { sm64::sm64_static_surfaces_load(s.as_ptr(), s.len() as u32) });
@@ -2119,6 +2146,16 @@ fn frame(data: &FD4TaskData) {
         PERF.lock().unwrap_or_else(|e| e.into_inner()).tick_ms += tt.elapsed().as_secs_f32() * 1000.0;
         match result {
             Some((state, mesh, colors, normals, parts, hits)) => {
+                // debug: Mario's centre crossing a loaded wall front to back in one tick
+                let step = glam::Vec3::from(state.position) - glam::Vec3::from(m.state.position);
+                if debug() && !FOLLOWING.load(Ordering::Relaxed) && step.length() < 200.0 {
+                    if let Some((wall, da, db)) = crossed_wall(&m.surfaces, m.state.position, state.position) {
+                        log(format!(
+                            "through a wall: action {:#x} fwd vel {:.1} moved {:.1}, distance {da:.1} -> {db:.1}, layer {:#x}",
+                            state.action, state.forward_velocity, step.length(), wall.force
+                        ));
+                    }
+                }
                 m.combat.deal(&player_ref.chr_ins, &targets, &hits, m.ticks);
                 m.prev_parts = m.parts.take();
                 m.parts = parts;
@@ -2264,14 +2301,6 @@ fn frame(data: &FD4TaskData) {
                 // the real collision again, with a floor under his feet for a moment (the area past
                 // a fog wall may still be loading in)
                 m.last_query = None;
-                // through a fog gate: he ends up inside its thickened wall, put him out on his side
-                let e = collision::sm_to_er(m.origin, m.state.position);
-                if let Some(out) = m.havok.out_of_thick_wall(glam::Vec3::new(e.0, e.1, e.2)) {
-                    let sm = collision::er_to_sm(m.origin, &HavokPosition(out.x, out.y, out.z, 0.0));
-                    log(format!("follow: Mario was inside a fog gate's wall, moved out to {sm:?}"));
-                    set_mario_position(m.id, sm);
-                    m.state.position = sm;
-                }
                 *FOLLOW_ENDED.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), m.state.position));
             }
         }
