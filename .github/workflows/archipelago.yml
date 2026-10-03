@@ -38,6 +38,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./flask_policy_tests.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell.exe -NoProfile -File tests/compose_paths.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           rustc --edition=2024 --test tests/ap_bridge.rs -o ap_bridge_tests.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./ap_bridge_tests.exe
