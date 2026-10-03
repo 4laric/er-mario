@@ -1227,6 +1227,13 @@ impl Drop for DrawTimer {
 }
 
 fn frame(data: &FD4TaskData) {
+    // outside Mario mode the Tarnished dies like anyone (the flag is set further down, while
+    // Mario is alive)
+    if !ENABLED.load(Ordering::Relaxed) {
+        if let Ok(flags) = unsafe { eldenring::cs::WorldChrManDbgFlags::instance_mut() } {
+            flags.player_no_dead = false;
+        }
+    }
     {
         let mut p = PERF.lock().unwrap_or_else(|e| e.into_inner());
         p.frames += 1;
@@ -2036,6 +2043,12 @@ fn frame(data: &FD4TaskData) {
         no_stomp.extend(targets.iter().enumerate().filter(|(_, t)| t.is_prop()).map(|(i, _)| i));
         let target_pos: Vec<([f32; 3], f32, f32, usize)> = targets.iter().enumerate().map(|(i, t)| (t.sm, t.radius, t.height, i)).collect();
         // SM64's health is Mario's: Elden Ring hits cost wedges, and the Tarnished's HP is kept full
+        // (a hit bigger than his whole HP would still kill him outright, a low-level character
+        // against a late boss: the game's own "player can't die" flag stops him at 1 HP, and it
+        // comes off when Mario himself is out of health, since his death is the Tarnished's)
+        if let Ok(flags) = unsafe { eldenring::cs::WorldChrManDbgFlags::instance_mut() } {
+            flags.player_no_dead = !m.dead;
+        }
         let hurt = {
             let data = &player_ref.chr_ins.modules.data;
             // the enemy Mario holds (a boss by the tail, or a picked-up enemy) and one he just threw
