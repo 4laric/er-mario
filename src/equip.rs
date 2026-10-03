@@ -39,7 +39,7 @@ fn image() -> &'static [u8] {
 }
 
 /// All matches of a pattern like "?? 8b f1 ?? 8b d8" in the executable sections.
-fn scan(pattern: &str) -> Vec<usize> {
+pub(crate) fn scan(pattern: &str) -> Vec<usize> {
     let pat: Vec<Option<u8>> = pattern.split_whitespace().map(|t| u8::from_str_radix(t, 16).ok()).collect();
     let img = image();
     let base = img.as_ptr() as usize;
