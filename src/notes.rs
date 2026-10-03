@@ -11,17 +11,18 @@ use windows::Win32::System::Memory::{PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLA
 
 use crate::{log, names, paths};
 
-/// Shown once after updating. Keep it to what a player notices (the box holds about 8 lines).
+/// Shown once after updating. Rewritten for every release (the box holds about 9 lines).
 const NOTES: &str = concat!(
     "ER Mario ",
     env!("CARGO_PKG_VERSION"),
-    "\n\n",
-    "Doors and fog gates hold: no more slipping through.\n",
-    "Lifts, cages and the drawbridge in Volcano Manor work.\n",
-    "Lava gives Mario his burning jump (one wedge).\n",
-    "Big bosses can't kill him in one hit any more,\n",
-    "and the Fire Giant's bar follows his first phase.\n",
-    "Holding crouch and unpausing no longer freeze him."
+    " Patch notes:\n\n",
+    "* Can't walk through doors and fog gates anymore.\n",
+    "* Lifts, cages and the big bridge in Volcano Manor work.\n",
+    "* Lava gives Mario his burning jump (one wedge).\n",
+    "* Bosses no longer one-shot.\n",
+    "* The Fire Giant is not an asshole anymore.\n",
+    "* Holding crouch and unpausing no longer freeze him.\n",
+    "* Some smaller fixes here and there."
 );
 
 /// Which version's notes were shown last.
