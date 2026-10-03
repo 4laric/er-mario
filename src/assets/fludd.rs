@@ -14,6 +14,8 @@ pub const TURBO_JET: usize = 27;
 // Reuse the horizontal stream, reversed and enlarged about its mouth, for Squirt.
 pub const SQUIRT_STREAM_SCALE: f32 = 4.0;
 pub const STREAM_MOUTH: [f32; 3] = [-0.055, -0.37, 0.0];
+pub const HOVER_MOUTHS: [[f32; 3]; 2] = [[0.07, -0.21, -0.16], [0.07, -0.21, 0.16]];
+pub const HOVER_ENDS: [[f32; 3]; 2] = [[1.07, -0.21, -0.16], [1.07, -0.21, 0.16]];
 pub const STREAM_END: [f32; 3] = [-0.055, -0.68, 0.0];
 pub const COLORS: [[f32; 4]; 4] = [
     [0.95, 0.68, 0.08, 1.0],
@@ -166,8 +168,8 @@ pub fn append(verts: &mut Vec<Vertex>, tris: &mut Vec<[u16; 3]>) {
         box_mesh(
             verts,
             tris,
-            [0.07, -0.225, z - 0.013],
-            [0.32, -0.195, z + 0.013],
+            [0.07, -0.26, z - 0.07],
+            [1.07, -0.16, z + 0.07],
             JETS,
             3,
         );
@@ -183,8 +185,8 @@ pub fn append(verts: &mut Vec<Vertex>, tris: &mut Vec<[u16; 3]>) {
     box_mesh(
         verts,
         tris,
-        [-0.085, -0.68, -0.025],
-        [-0.025, -0.37, 0.025],
+        [-0.11, -0.68, -0.055],
+        [0.0, -0.37, 0.055],
         TURBO_JET,
         3,
     );

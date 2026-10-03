@@ -22,7 +22,8 @@ static int safe_action(struct MarioState *m) {
 int er_fludd_step(struct MarioState *m) {
     int grounded = !(m->action & ACT_FLAG_AIR) && m->pos[1] <= m->floorHeight + 5;
     int safe = safe_action(m) && !(m->input & (INPUT_A_PRESSED | INPUT_B_PRESSED | INPUT_Z_PRESSED));
-    int operation = er_fludd_policy(safe, grounded && m->forwardVel > -1 && m->forwardVel < 1);
+    /* Released nozzles refill while safely grounded, including walking. */
+    int operation = er_fludd_policy(safe, grounded);
     /* Stock SM64 loops expire when requests stop. Do not keep a jet audible
        after release, an empty tank, a refused action, or a menu suspension. */
     f32 *sound_pos = m->marioObj ? m->marioObj->header.gfx.cameraToObject : m->pos;

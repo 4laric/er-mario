@@ -9,6 +9,8 @@ mod carry;
 mod collision;
 mod coins;
 mod combat;
+mod flask;
+mod flask_policy;
 mod engine_mario;
 mod equip;
 mod kbd;
@@ -21,11 +23,12 @@ mod moving;
 mod input_policy;
 mod addon_hitboxes;
 mod collision_geometry;
-mod movement_guard;
 mod throw_collision;
 mod names;
+mod notes;
 mod paths;
 mod sm64;
+mod skate;
 mod ap_capabilities;
 mod ap_stats;
 pub(crate) mod ap_fludd;
@@ -36,6 +39,7 @@ mod goldmask_policy;
 mod hud_install_lock;
 mod swing;
 mod stats;
+mod update;
 mod version;
 mod voice;
 mod worker;
@@ -60,15 +64,17 @@ use windows::Win32::UI::Input::XboxController::{
     XINPUT_GAMEPAD_BACK, XINPUT_GAMEPAD_START, XINPUT_GAMEPAD_X, XINPUT_GAMEPAD_Y,
     XINPUT_GAMEPAD_RIGHT_SHOULDER, XINPUT_GAMEPAD_DPAD_UP, XINPUT_GAMEPAD_DPAD_DOWN,
     XINPUT_GAMEPAD_DPAD_LEFT, XINPUT_GAMEPAD_DPAD_RIGHT, XINPUT_GAMEPAD_LEFT_THUMB,
-    XINPUT_GAMEPAD_RIGHT_THUMB, XINPUT_STATE,
+    XINPUT_STATE,
 };
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows::core::{PCSTR, w};
 
 /// Metres per SM64 unit (Mario is ~160 units tall, so ~1.6 m).
 pub(crate) const SCALE: f32 = 0.01;
+/// The game's floor material id for lava (ChrPhysicsMaterialInfo::hit_material).
+const LAVA_MATERIAL: i32 = 7;
 /// Havok collision layers Mario collides with (terrain, buildings, props, ...).
-const COLLISION_LAYERS: [u32; 9] = [0x1e, 0x37, 0x38, 0x39, 0x3a, 0x47, 0x48, 0x49, 0x51];
+const COLLISION_LAYERS: [u32; 11] = [0x1e, 0x2e, 0x37, 0x38, 0x39, 0x3a, 0x46, 0x47, 0x48, 0x49, 0x51];
 /// Raycast filter for the ground probes.
 const RAY_FILTER: u32 = 0x08;
 /// Lifts Mario 1 m (out of places he's stuck in).
@@ -170,9 +176,17 @@ fn xinput_filter(index: u32, state: *mut XINPUT_STATE, rc: u32) -> u32 {
             if selecting { g.wButtons &= !(XINPUT_GAMEPAD_DPAD_UP | XINPUT_GAMEPAD_DPAD_DOWN | XINPUT_GAMEPAD_DPAD_RIGHT | XINPUT_GAMEPAD_DPAD_LEFT); }
         }
         if ap_cappy::visual().enabled { g.bRightTrigger = 0; }
-        if ap_sonic::visual().enabled { g.wButtons &= !(XINPUT_GAMEPAD_LEFT_THUMB | XINPUT_GAMEPAD_RIGHT_THUMB); }
+        if skate::enabled() && !g.wButtons.contains(XINPUT_GAMEPAD_RIGHT_SHOULDER) { g.wButtons &= !XINPUT_GAMEPAD_DPAD_LEFT; }
+        if skate::visual().mounted {
+            g.wButtons &= !(XINPUT_GAMEPAD_X | XINPUT_GAMEPAD_RIGHT_SHOULDER);
+            g.bLeftTrigger = 0;
+        }
+        if ap_sonic::visual().enabled {
+            g.wButtons &= !XINPUT_GAMEPAD_LEFT_THUMB;
+            g.bLeftTrigger = 0;
+        }
         // with the SM64 camera the right stick is Lakitu's C-buttons, not Elden Ring's camera
-        if lakitu::ON.load(Ordering::Relaxed) {
+        if input_policy::lakitu_owns_camera(lakitu::ON.load(Ordering::Relaxed), lakitu::TARGET_LOCKED.load(Ordering::Relaxed)) {
             g.sThumbRX = 0;
             g.sThumbRY = 0;
         }
@@ -293,6 +307,8 @@ struct MarioState {
     parts: Option<[engine_mario::PartPose; engine_mario::PARTS]>,
     combat: combat::Combat,
     addon_hits: addon_hitboxes::Hitboxes,
+    flask: flask_policy::Tracker,
+    flask_heal: u8,
     /// the Tarnished died: Mario plays SM64's death until the game respawns the player
     dead: bool,
     /// lifts, doors and other moving collision as SM64 surface objects
@@ -574,6 +590,11 @@ fn init_sm64(export: bool) -> Option<Option<assets::model::MarioModel>> {
 fn startup() {
     let build = assets::check();
     log(format!("mod folder {}", paths::mod_dir().display()));
+    update::start();
+    // (not on the setup launch: the game is closed right after it)
+    if !build {
+        notes::start();
+    }
     if build {
         hud::setup_progress("Setting up ER Mario", 0.0, "Reading the ROM");
     }
@@ -788,7 +809,7 @@ fn havok_surfaces(h: &mut havok_col::HavokCollision, origin: [f32; 3], mario: [f
     }
     let mut centers = std::collections::HashMap::new();
     for (t, layer, body) in &tris {
-        let mid = if h.is_convex(*body) || h.is_boxed(*body) {
+        let mid = if h.is_convex(*body) || h.is_boxed(*body) || h.mesh_of(*body).is_some_and(|m| m.small_closed()) {
             *centers.entry(*body).or_insert_with(|| {
                 let mesh = h.mesh_of(*body)?;
                 let (p, q) = h.transform(*body)?;
@@ -800,12 +821,129 @@ fn havok_surfaces(h: &mut havok_col::HavokCollision, origin: [f32; 3], mario: [f
         let v = t.map(|p| {
             collision::er_to_sm(origin, &HavokPosition(p.x, p.y, p.z, 0.0)).map(|x| x.round() as i32)
         });
-        let Some(v) = collision_geometry::surface_vertices(v, mid) else { continue };
+        let Some(v) = collision_geometry::surface_vertices(v, mid, Some(mario)) else { continue };
         let mut surf = sm64::SM64Surface::grass(v);
         surf.force = *layer as i16;
         out.push(surf);
     }
+    // moving objects (a lift's floor) are surface objects, not in `out`: no patches under them
+    let moving: Vec<(glam::Vec3, glam::Vec3)> = h
+        .exclude
+        .iter()
+        .filter_map(|&i| {
+            let (mesh, (t, q)) = (h.mesh_of(i)?, h.transform(i)?);
+            let v = mesh.tris().iter().flatten().map(|v| q * *v + t);
+            let lo = v.clone().fold(glam::Vec3::splat(f32::MAX), |a, b| a.min(b));
+            let hi = v.fold(glam::Vec3::splat(f32::MIN), |a, b| a.max(b));
+            Some((lo - glam::Vec3::splat(0.5), hi + glam::Vec3::splat(0.5)))
+        })
+        .collect();
+    floor_patches(&mut out, origin, mario, player, &moving);
     Some(out)
+}
+
+/// Floors the game's map ray finds around Mario that our collision is missing (meshes built from
+/// custom pieces, like the Volcano Manor drawbridge, can't be decoded): a small flat patch there.
+/// Not inside `moving` (world boxes of the moving objects): a patch under a lift's floor stayed
+/// behind when it went down, and Mario stood on it while the cage's roof came through him.
+fn floor_patches(out: &mut Vec<sm64::SM64Surface>, origin: [f32; 3], mario: [f32; 3], player: &PlayerIns, moving: &[(glam::Vec3, glam::Vec3)]) {
+    // grid around Mario (SM64 units) and how far up/down the ray looks (metres)
+    const STEP: f32 = 75.0;
+    const HALF: i32 = 4;
+    let Ok(havok) = (unsafe { eldenring::cs::CSHavokMan::instance() }) else { return };
+    let floors: Vec<[glam::Vec3; 3]> = out
+        .iter()
+        .filter(|s| !collision::is_wall(s))
+        .map(|s| s.vertices.map(|p| glam::Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32)))
+        .filter(|t| (t[1] - t[0]).cross(t[2] - t[1]).y > 0.0)
+        .collect();
+    // floor heights of our own collision at (x, z)
+    let ours = |x: f32, z: f32| {
+        floors.iter().filter_map(move |t| {
+            let p = glam::Vec2::new(x, z);
+            let [a, b, c] = t.map(|v| glam::Vec2::new(v.x, v.z));
+            let d = (b - a).perp_dot(c - a);
+            if d.abs() < 1e-3 {
+                return None;
+            }
+            let u = (b - p).perp_dot(c - p) / d;
+            let v = (c - p).perp_dot(a - p) / d;
+            let w = 1.0 - u - v;
+            (u >= -0.01 && v >= -0.01 && w >= -0.01).then(|| t[0].y * u + t[1].y * v + t[2].y * w)
+        })
+    };
+    let mut added = 0;
+    for gx in -HALF..=HALF {
+        for gz in -HALF..=HALF {
+            let (x, z) = (mario[0] + gx as f32 * STEP, mario[2] + gz as f32 * STEP);
+            let top = collision::sm_to_er(origin, [x, mario[1] + 200.0, z]);
+            let Some(hit) = havok.phys_world.cast_ray(RAY_FILTER, &top, eldenring::position::PositionDelta(0.0, -8.0, 0.0), player) else { continue };
+            let at = glam::Vec3::new(hit.0, hit.1, hit.2);
+            if moving.iter().any(|(lo, hi)| at.cmpge(*lo).all() && at.cmple(*hi).all()) {
+                continue;
+            }
+            let y = collision::er_to_sm(origin, &HavokPosition(hit.0, hit.1, hit.2, 0.0))[1];
+            if ours(x, z).any(|h| (h - y).abs() < 40.0) {
+                continue;
+            }
+            let r = STEP / 2.0 + 5.0;
+            let q = |dx: f32, dz: f32| [(x + dx).round() as i32, y.round() as i32, (z + dz).round() as i32];
+            // two triangles facing up (the facing is settled like any other floor)
+            for v in [[q(-r, -r), q(r, -r), q(r, r)], [q(-r, -r), q(r, r), q(-r, r)]] {
+                if let Some(v) = collision_geometry::surface_vertices(v, None, Some(mario)) {
+                    let mut surf = sm64::SM64Surface::grass(v);
+                    surf.force = 0xfe;
+                    out.push(surf);
+                }
+            }
+            added += 1;
+        }
+    }
+    if added > 0 {
+        crate::dlog(format!("floor patches: {added} from the game's map ray"));
+    }
+}
+
+/// Which eye texture SM64 is drawing (cells 5 open, 6 half, 7 closed, 8 dead): the median
+/// texture cell of this frame's eye triangles.
+fn eye_cell(uv: &[f32], used: usize) -> u8 {
+    let mut eyes: Vec<f32> = (0..used)
+        .filter_map(|t| {
+            let u = [uv[t * 6], uv[t * 6 + 2], uv[t * 6 + 4]];
+            let mean = (u[0] + u[1] + u[2]) / 3.0;
+            let span = u.iter().fold(f32::MIN, |a, &b| a.max(b)) - u.iter().fold(f32::MAX, |a, &b| a.min(b));
+            (span > 1e-4 && (5.0 / 11.0..9.0 / 11.0).contains(&mean)).then_some(mean)
+        })
+        .collect();
+    eyes.sort_by(f32::total_cmp);
+    eyes.get(eyes.len() / 2).map(|m| (m * 11.0) as u8).unwrap_or(5)
+}
+
+/// Debug: a loaded wall Mario's centre crossed front to back between two ticks (at his wall check
+/// heights), with his distance to it before and after.
+fn crossed_wall(surfaces: &[sm64::SM64Surface], a: [f32; 3], b: [f32; 3]) -> Option<(sm64::SM64Surface, f32, f32)> {
+    for s in surfaces.iter().filter(|s| collision::is_wall(s)) {
+        let [p0, p1, p2] = s.vertices.map(|p| glam::Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32));
+        let n = (p1 - p0).cross(p2 - p1);
+        if n.length_squared() < 1e-6 {
+            continue;
+        }
+        let n = n.normalize();
+        for h in [30.0, 60.0] {
+            let (pa, pb) = (glam::Vec3::new(a[0], a[1] + h, a[2]), glam::Vec3::new(b[0], b[1] + h, b[2]));
+            let (da, db) = (n.dot(pa - p0), n.dot(pb - p0));
+            if da <= 0.0 || db >= 0.0 {
+                continue;
+            }
+            // where the move crosses the plane: inside the triangle?
+            let x = pa + (pb - pa) * (da / (da - db));
+            let inside = [(p0, p1), (p1, p2), (p2, p0)].iter().all(|(u, v)| n.dot((*v - *u).cross(x - *u)) >= -1.0);
+            if inside {
+                return Some((*s, da, db));
+            }
+        }
+    }
+    None
 }
 
 fn load_surfaces(surfaces: &[sm64::SM64Surface]) {
@@ -944,6 +1082,9 @@ static CUTSCENE_HIDE: AtomicBool = AtomicBool::new(false);
 
 /// Set by input_task when the player pressed interact; frame() then watches for an event animation.
 static INTERACT_PRESSED: AtomicBool = AtomicBool::new(false);
+/// Native item use is admitted only during safe grounded Mario gameplay.
+static FLASK_ALLOWED: AtomicBool = AtomicBool::new(false);
+static FLASK_REQUEST_ANIM: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
 /// Elden Ring's ladder animations (getting on, climbing, sliding, getting off).
 fn ladder_anim(anim: i32) -> bool {
     (28000..29000).contains(&anim) || (51100..51200).contains(&anim)
@@ -970,7 +1111,8 @@ static IN_WORLD: AtomicBool = AtomicBool::new(false);
 /// Whether the player is in the world (not the title screen, a menu before loading, or a load).
 pub(crate) fn in_world() -> bool {
     IN_WORLD.load(Ordering::Relaxed)
-}/// The loadout from before Mario mode (restored when it's switched off; kept across respawns).
+}
+/// The loadout from before Mario mode (restored when it's switched off; kept across respawns).
 static SAVED_LOADOUT: Mutex<Option<equip::Loadout>> = Mutex::new(None);
 /// Loadout to put back shortly after Mario mode ended (after the model reload).
 static PENDING_RESTORE: Mutex<Option<(std::time::Instant, equip::Loadout)>> = Mutex::new(None);
@@ -983,13 +1125,14 @@ static ON_LADDER: AtomicBool = AtomicBool::new(false);
 
 /// Runs right after the game turned the pad into character actions (ChrIns_PreBehaviorSafe):
 /// detects menus (buttons pressed but nothing reaches the character) and strips every action but
-/// interact from the Tarnished, so he never rolls, attacks or jumps on Mario's buttons.
+/// interact and item use from the Tarnished, so he never rolls, attacks or jumps on Mario's buttons.
 fn input_task() {
     if !ENABLED.load(Ordering::Relaxed) {
         MENU_OPEN.store(false, Ordering::Relaxed);
         return;
     }
     let Some(player) = (unsafe { WorldChrMan::instance_mut() }).ok().and_then(|w| w.main_player.as_mut()) else { return };
+    let before_anim = current_anim(&player.chr_ins);
     let pad = PAD.lock().unwrap_or_else(|e| e.into_inner()).filter(|(_, t)| t.elapsed().as_secs_f32() < 0.25).map(|(p, _)| p);
     let req: &mut eldenring::cs::CSChrActionRequestModule = &mut player.chr_ins.modules.action_request;
     let bits = |a: &mut eldenring::cs::ChrActions| unsafe { &mut *(a as *mut _ as *mut u64) };
@@ -1010,16 +1153,18 @@ fn input_task() {
     let menu = MENU_OPEN.load(Ordering::Relaxed);
     let (mut opener, mut pressed) = (false, false);
     let mut right_trigger = 0;
-    if let Some(p) = pad {
+    // alt-tabbed: the game ignores the pad but we still read it, which looked like a menu eating
+    // every press (Mario froze until the next press got through)
+    if let Some(p) = pad.filter(|_| kbd::focused()) {
         let g = p.Gamepad;
         let b = g.wButtons;
         let stick = (g.sThumbLX as i32).abs() > 12000 || (g.sThumbLY as i32).abs() > 12000;
         pressed |= b.contains(XINPUT_GAMEPAD_A)
             || b.contains(XINPUT_GAMEPAD_B)
-            || b.contains(XINPUT_GAMEPAD_X)
+            || (b.contains(XINPUT_GAMEPAD_X) && (menu || !skate::visual().mounted))
             || b.contains(XINPUT_GAMEPAD_Y)
             || b.contains(XINPUT_GAMEPAD_LEFT_SHOULDER)
-            || g.bLeftTrigger > 100
+            || (g.bLeftTrigger > 100 && (menu || (!ap_sonic::visual().enabled && !skate::visual().mounted)))
             || (menu && stick);
         right_trigger = g.bRightTrigger;
         opener |= b.contains(XINPUT_GAMEPAD_START) || b.contains(XINPUT_GAMEPAD_BACK);
@@ -1028,7 +1173,7 @@ fn input_task() {
         let key = |vk: i32| unsafe { GetAsyncKeyState(vk) } as u16 & 0x8000 != 0;
         // Esc (menu), G (map); E interact, Space, F, R, Q, Enter, mouse buttons, and WASD in menus
         opener |= key(0x1B) || key(0x47);
-        pressed |= [0x45, 0x20, 0x46, 0x52, 0x51, 0x0D, 0x01, 0x02].into_iter().any(key)
+        pressed |= [0x45, 0x20, 0x46, 0x52, 0x51, 0x0D, 0x01, 0x02].into_iter().filter(|&vk| vk != 0x52 || menu || !skate::visual().mounted).any(key)
             || (menu && [0x57, 0x41, 0x53, 0x44].into_iter().any(key));
     }
     // the game's own "a menu is up" (pause menu, prompts): the most reliable signal, both ways
@@ -1041,7 +1186,13 @@ fn input_task() {
         MENU_OPEN.store(false, Ordering::Relaxed);
     }
     GAME_MENU.store(game_menu, Ordering::Relaxed);
-    let inferred_menu = input_policy::infer_menu(menu, routed, opener, pressed, right_trigger, ap_cappy::visual().enabled);
+    // Only a fresh game-owned press can infer a menu opening. A held crouch
+    // does not route on every frame; addon-owned RT must remain excluded.
+    static HELD: AtomicBool = AtomicBool::new(false);
+    let mut held = HELD.load(Ordering::Relaxed);
+    let inferred_menu = input_policy::infer_menu_fresh(menu, routed, opener,
+        pressed, right_trigger, ap_cappy::visual().enabled, &mut held);
+    HELD.store(held, Ordering::Relaxed);
     if opener {
         if !menu {
             log("input: menu opened");
@@ -1053,6 +1204,10 @@ fn input_task() {
         MENU_OPEN.store(inferred_menu, Ordering::Relaxed);
     }
     const ACTION: u64 = 1 << 4; // interact (doors, chests, graces, messages...)
+    const USE_ITEM: u64 = 1 << 7;
+    const CHANGE_ITEM: u64 = 1 << 11;
+    const LOCK_ON: u64 = 1 << 12;
+    let allow_item = FLASK_ALLOWED.load(Ordering::Relaxed);
     // research (debug): which action bits a press makes, to find what NPC dialogue listens to
     if debug() {
         static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -1072,13 +1227,16 @@ fn input_task() {
     if *bits(&mut req.new_action_presses) & ACTION != 0 {
         INTERACT_PRESSED.store(true, Ordering::Relaxed);
     }
+    if allow_item && *bits(&mut req.new_action_presses) & USE_ITEM != 0 {
+        FLASK_REQUEST_ANIM.store(before_anim, Ordering::Relaxed);
+    }
     for a in [
         &mut req.action_requests,
         &mut req.new_action_presses,
         &mut req.queued_action_inputs,
         &mut req.cancel_ready_actions,
     ] {
-        *bits(a) &= ACTION;
+        *bits(a) &= ACTION | CHANGE_ITEM | LOCK_ON | if allow_item { USE_ITEM } else { 0 };
     }
 }
 
@@ -1124,6 +1282,15 @@ impl Drop for DrawTimer {
 }
 
 fn frame(data: &FD4TaskData) {
+    FLASK_ALLOWED.store(false, Ordering::Relaxed);
+    lakitu::TARGET_LOCKED.store(false, Ordering::Relaxed);
+    // outside Mario mode the Tarnished dies like anyone (the flag is set further down, while
+    // Mario is alive)
+    if !ENABLED.load(Ordering::Relaxed) {
+        if let Ok(flags) = unsafe { eldenring::cs::WorldChrManDbgFlags::instance_mut() } {
+            flags.player_no_dead = false;
+        }
+    }
     {
         let mut p = PERF.lock().unwrap_or_else(|e| e.into_inner());
         p.frames += 1;
@@ -1298,6 +1465,14 @@ fn frame(data: &FD4TaskData) {
         if last != a && debug() {
             crate::dlog(format!("tarnished anim -> {a}"));
         }
+        // debug: what the Tarnished stands on (to learn material ids, e.g. lava)
+        if debug() {
+            static LAST_MATERIAL: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(i32::MIN);
+            let material = player.chr_ins.modules.physics.material_info.hit_material;
+            if LAST_MATERIAL.swap(material, Ordering::Relaxed) != material {
+                log(format!("floor material -> {material} (material param {})", player.chr_ins.modules.material.material_param_id));
+            }
+        }
     }
     static FALL_OVERRIDDEN: AtomicBool = AtomicBool::new(false);
     if ENABLED.load(Ordering::Relaxed) && !HANDS_OFF.load(Ordering::Relaxed) {
@@ -1358,7 +1533,7 @@ fn frame(data: &FD4TaskData) {
                 *PENDING_RESTORE.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), saved));
             }
             let id = m.id;
-            worker::call("delete", move |_| unsafe { sm64::sm64_mario_delete(id) });
+            worker::call("delete", move |_| { skate::suspend(); unsafe { sm64::sm64_mario_delete(id) }; });
             physics.gravity_disabled = false;
             set_opacity(1.0);
             *engine_mario::POSE.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -1503,6 +1678,8 @@ fn frame(data: &FD4TaskData) {
             parts: None,
             combat: combat::Combat::new(),
             addon_hits: addon_hitboxes::Hitboxes::new(),
+            flask: flask_policy::Tracker::default(),
+            flask_heal: 0,
             dead: false,
             moving,
             stuck_ticks: 0,
@@ -1547,6 +1724,8 @@ fn frame(data: &FD4TaskData) {
     }
     // SM64's camera (F9 switches to Elden Ring's): Elden Ring's own for cutscenes, doors, deaths
     {
+        let locked = player_ref.chr_ins.is_locked_on;
+        lakitu::TARGET_LOCKED.store(locked, Ordering::Relaxed);
         static F9_WAS: AtomicBool = AtomicBool::new(false);
         let f9 = kbd::focused() && unsafe { GetAsyncKeyState(0x78) } as u16 & 0x8000 != 0;
         if f9 && !F9_WAS.swap(true, Ordering::Relaxed) {
@@ -1557,7 +1736,11 @@ fn frame(data: &FD4TaskData) {
             F9_WAS.store(false, Ordering::Relaxed);
         }
         let in_cutscene = cutscene_now(m.dead, player_ref);
-        if in_cutscene {
+        if locked {
+            // Native camera handles target framing and right-stick target switching.
+            // Reset the override so steering follows its live forward direction.
+            lakitu::reset();
+        } else if in_cutscene {
             // a cutscene: the game's own camera shows (no update, so the camera isn't written);
             // Lakitu carries on afterwards where he was
         } else if WORLD_PAUSED.load(Ordering::Relaxed) {
@@ -1641,6 +1824,40 @@ fn frame(data: &FD4TaskData) {
         None
     };
     hud::set(wedges.min(ap_stats::max_wedges() as u8), hide_why, true);
+    let flask_ready = hide_why.is_none() && !FOLLOWING.load(Ordering::Relaxed) && !lakitu::first_person()
+        && m.state.health >= 0x100 && m.state.action & ((1 << 11) | (1 << 12) | (1 << 13) | (1 << 14) | (1 << 17) | (1 << 20) | (1 << 21) | (1 << 23)) == 0
+        && !carry::holding() && !swing::holding() && !skate::visual().mounted;
+    FLASK_ALLOWED.store(flask_ready, Ordering::Relaxed);
+    let request = FLASK_REQUEST_ANIM.swap(-1, Ordering::Relaxed);
+    let sample = flask_ready.then(flask::snapshot).flatten();
+    if let Some(sample) = sample { hud::set_flask(sample.total, sample.allocation); }
+    let queued = flask::queued(player_ref);
+    let anim = current_anim(&player_ref.chr_ins);
+    let pending = m.flask.pending();
+    let consumed = m.flask.observe(sample, (request != -1).then_some(request), queued, anim, data.delta_time.time);
+    // Capture only state changes during a drink, so live failures distinguish
+    // native consumption, animation transitions and an unsafe-state reset.
+    if request != -1 || pending || m.flask.pending() {
+        static LAST: Mutex<Option<(bool, Option<(u32, u16)>, Option<u32>, i32)>> = Mutex::new(None);
+        let state = (flask_ready, sample.map(|s| (s.total, s.tiers)), queued, anim);
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        if request != -1 || *last != Some(state) || (pending && !m.flask.pending()) {
+            log(format!("flask: observe ready={} charges={:?} queued={queued:?} anim={anim} request={request} pending={} Mario={:#x} native HP={}/{}", flask_ready, state.1, m.flask.pending(), m.state.action, player_ref.chr_ins.modules.data.hp, player_ref.chr_ins.modules.data.max_hp));
+            *last = Some(state);
+        }
+    }
+    if let Some(item) = consumed {
+        let heal = flask::healing(player_ref, item);
+        m.flask_heal = m.flask_heal.saturating_add(heal);
+        log(format!("flask: native Crimson charge consumed, Mario healing {heal} quarter-wedges"));
+    }
+    if !flask_ready { m.flask_heal = 0; }
+    {
+        static SUSPENDED: AtomicBool = AtomicBool::new(false);
+        let blocked = hide_why.is_some() || FOLLOWING.load(Ordering::Relaxed) || lakitu::first_person() || !kbd::focused();
+        if blocked && !SUSPENDED.swap(true, Ordering::Relaxed) && skate::enabled() { worker::call("skating suspended", |_| skate::suspend()); }
+        if !blocked { SUSPENDED.store(false, Ordering::Relaxed); }
+    }
     if (hide_why.is_some() || FOLLOWING.load(Ordering::Relaxed)) && (ap_fludd::visual().enabled || ap_cappy::visual().enabled || ap_sonic::visual().enabled) {
         m.addon_hits.reset();
         worker::call("addon movement suspended", |_| { unsafe { sm64::sm64_er_fludd_input(0, 0, 0, 0); sm64::sm64_er_addons_input(0, 0, 0, 0); }; ap_fludd::publish(); });
@@ -1755,7 +1972,7 @@ fn frame(data: &FD4TaskData) {
         ap_capabilities::set_live_instance(false);
         m.dead = true;
         let id = m.id;
-        worker::call("kill", move |_| unsafe { sm64::sm64_mario_kill(id) });
+        worker::call("kill", move |_| { skate::suspend(); unsafe { sm64::sm64_mario_kill(id) }; });
         log("the Tarnished died: Mario dies");
         stats::update(|s| s.deaths += 1);
         coins::clear();
@@ -1766,7 +1983,7 @@ fn frame(data: &FD4TaskData) {
         log("respawned: recreating Mario");
         m.moving.clear(&mut m.havok);
         let id = m.id;
-        worker::call("delete", move |_| unsafe { sm64::sm64_mario_delete(id) });
+        worker::call("delete", move |_| { skate::suspend(); unsafe { sm64::sm64_mario_delete(id) }; });
         *guard = None;
         return;
     }
@@ -1828,6 +2045,9 @@ fn frame(data: &FD4TaskData) {
         m.acc -= 1.0 / 30.0;
         SM64_TICKS.fetch_add(1, Ordering::Relaxed);
         let (mut cap_held, mut spin_held, mut air_dash) = (false, false, false);
+        let riding = skate::visual().mounted;
+        let mut skate_trick = 0u32;
+        let (mut skate_toggle, mut skate_push, mut skate_brake, mut skate_ollie, mut skate_steer) = (false, false, false, false, 0.0f32);
         let mut fludd_held = false;
         let mut fludd_select = 0u32;
         let mut fludd_cycle = false;
@@ -1840,9 +2060,15 @@ fn frame(data: &FD4TaskData) {
             };
             inputs.stick_x = axis(g.sThumbLX);
             inputs.stick_y = -axis(g.sThumbLY);
+            skate_toggle = skate::enabled() && g.wButtons.contains(XINPUT_GAMEPAD_DPAD_LEFT) && !g.wButtons.contains(XINPUT_GAMEPAD_RIGHT_SHOULDER);
+            skate_push = g.wButtons.contains(XINPUT_GAMEPAD_A);
+            skate_brake = g.wButtons.contains(XINPUT_GAMEPAD_B);
+            skate_ollie = g.wButtons.contains(XINPUT_GAMEPAD_X);
+            skate_trick = if g.bLeftTrigger > 100 { 3 } else if g.wButtons.contains(XINPUT_GAMEPAD_RIGHT_SHOULDER) { 2 } else { 0 };
+            skate_steer = -axis(g.sThumbLX);
             cap_held = g.bRightTrigger > 100;
             spin_held = g.wButtons.contains(XINPUT_GAMEPAD_LEFT_THUMB);
-            air_dash = g.wButtons.contains(XINPUT_GAMEPAD_RIGHT_THUMB);
+            air_dash = input_policy::air_dash_trigger(ap_sonic::visual().enabled, g.bLeftTrigger);
             fludd_held = g.wButtons.contains(XINPUT_GAMEPAD_RIGHT_SHOULDER);
             if fludd_held {
                 if g.wButtons.contains(XINPUT_GAMEPAD_DPAD_UP) { fludd_select = ap_fludd::HOVER; }
@@ -1851,8 +2077,9 @@ fn frame(data: &FD4TaskData) {
                 else if g.wButtons.contains(XINPUT_GAMEPAD_DPAD_LEFT) { fludd_select = ap_fludd::SQUIRT; }
             }
             inputs.button_a = g.wButtons.contains(XINPUT_GAMEPAD_A) as u8;
-            inputs.button_b = (g.wButtons.contains(XINPUT_GAMEPAD_X) || g.wButtons.contains(XINPUT_GAMEPAD_B)) as u8;
-            inputs.button_z = (g.wButtons.contains(XINPUT_GAMEPAD_LEFT_SHOULDER) || g.bLeftTrigger > 100) as u8;
+            // X is native item use; B remains Mario's punch/grab/throw.
+            inputs.button_b = g.wButtons.contains(XINPUT_GAMEPAD_B) as u8;
+            inputs.button_z = (g.wButtons.contains(XINPUT_GAMEPAD_LEFT_SHOULDER) || (!ap_sonic::visual().enabled && g.bLeftTrigger > 100)) as u8;
         }
         // SM64's first-person view: Mario stands still, the stick looks around
         if lakitu::first_person() {
@@ -1868,6 +2095,12 @@ fn frame(data: &FD4TaskData) {
                 inputs.stick_y = k.stick_y;
             }
             if !menu_walk {
+                skate_toggle |= skate::enabled() && k.skate_toggle;
+                skate_push |= k.a;
+                skate_brake |= k.b;
+                if skate_trick == 0 { skate_trick = k.skate_trick; }
+                skate_ollie |= k.skate_ollie;
+                if skate_steer == 0.0 { skate_steer = -k.stick_x; }
                 inputs.button_a |= k.a as u8;
                 inputs.button_b |= k.b as u8;
                 inputs.button_z |= k.z as u8;
@@ -1893,6 +2126,15 @@ fn frame(data: &FD4TaskData) {
                 inputs.cam_look_x = -inputs.cam_look_x;
                 inputs.cam_look_z = -inputs.cam_look_z;
             }
+        }
+        let flask_pose = m.flask.pose();
+        if flask_pose.is_some() {
+            inputs = sm64::SM64MarioInputs { cam_look_x: inputs.cam_look_x, cam_look_z: inputs.cam_look_z, ..Default::default() };
+            fludd_held = false; cap_held = false; spin_held = false; air_dash = false;
+        }
+        if riding || skate_toggle {
+            inputs.button_a = 0; inputs.button_b = 0; inputs.button_z = 0;
+            fludd_held = false; cap_held = false; spin_held = false; air_dash = false;
         }
         m.ticks += 1;
         let moving_changed = m.moving.update(&mut m.havok, m.origin, m.state.position);
@@ -1973,6 +2215,12 @@ fn frame(data: &FD4TaskData) {
         no_stomp.extend(targets.iter().enumerate().filter(|(_, t)| t.is_prop()).map(|(i, _)| i));
         let target_pos: Vec<([f32; 3], f32, f32, usize)> = targets.iter().enumerate().map(|(i, t)| (t.sm, t.radius, t.height, i)).collect();
         // SM64's health is Mario's: Elden Ring hits cost wedges, and the Tarnished's HP is kept full
+        // (a hit bigger than his whole HP would still kill him outright, a low-level character
+        // against a late boss: the game's own "player can't die" flag stops him at 1 HP, and it
+        // comes off when Mario himself is out of health, since his death is the Tarnished's)
+        if let Ok(flags) = unsafe { eldenring::cs::WorldChrManDbgFlags::instance_mut() } {
+            flags.player_no_dead = !m.dead;
+        }
         let hurt = {
             let data = &player_ref.chr_ins.modules.data;
             // the enemy Mario holds (a boss by the tail, or a picked-up enemy) and one he just threw
@@ -1983,11 +2231,20 @@ fn frame(data: &FD4TaskData) {
             let damaged = m.combat.took_damage(data.hp, data.max_hp);
             let was_damaged = damaged.is_some();
             let from_held = was_damaged && (carry::harmless(here) || swing::harmless(here));
-            let hurt = damaged.filter(|_| !m.dead && !from_held);
+            // the game's own lava damage: Mario already pays for lava with SM64's lava boost
+            // (also for a moment after: the burn keeps ticking while he's bounced up)
+            static ON_LAVA: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+            let mut on_lava = ON_LAVA.lock().unwrap_or_else(|e| e.into_inner());
+            if player_ref.chr_ins.modules.physics.material_info.hit_material == LAVA_MATERIAL {
+                *on_lava = Some(std::time::Instant::now());
+            }
+            let from_lava = on_lava.is_some_and(|t| t.elapsed().as_secs_f32() < 1.0);
+            drop(on_lava);
+            let hurt = damaged.filter(|_| !m.dead && !from_held && !from_lava);
             if debug() && was_damaged {
                 log(format!(
                     "hurt: {} (last carried {:#x}), hp {} of {}, mario action {:#x}",
-                    if from_held { "ignored, from the enemy Mario holds or threw" } else { "taken" },
+                    if from_held { "ignored, from the enemy Mario holds or threw" } else if from_lava { "ignored, the game's lava damage" } else { "taken" },
                     carry::last_mob_key(),
                     data.hp,
                     data.max_hp,
@@ -2029,6 +2286,7 @@ fn frame(data: &FD4TaskData) {
         };
         let rested = !m.dead && REST.swap(false, Ordering::Relaxed);
         let health_before = m.state.health;
+        let flask_heal = std::mem::take(&mut m.flask_heal);
         let head = lakitu::head();
         let grab = swing::take_start();
         let pick_up = carry::take_start();
@@ -2036,7 +2294,9 @@ fn frame(data: &FD4TaskData) {
         let stagger_cue = swing::take_cue();
         let action_before = m.state.action;
         let alive = !m.dead;
-        let fludd_allowed = alive && kbd::focused() && !MENU_OPEN.load(Ordering::Relaxed) && !FOLLOWING.load(Ordering::Relaxed) && !lakitu::first_person();
+        let fludd_allowed = alive && flask_pose.is_none() && kbd::focused() && !MENU_OPEN.load(Ordering::Relaxed) && !FOLLOWING.load(Ordering::Relaxed) && !lakitu::first_person();
+        let skate_allowed = fludd_allowed && !carry::holding() && !swing::holding();
+        let addons_allowed = fludd_allowed && !riding && !skate_toggle;
         let hurt_from = targets
             .iter()
             .min_by(|a, b| {
@@ -2078,10 +2338,13 @@ fn frame(data: &FD4TaskData) {
             m.stuck_ticks = 0;
         }
         let stuck_at = m.state.position;
-        let guarded_target_pos = target_pos.clone();
-        let guarded_no_stomp = no_stomp.clone();
         let tt = std::time::Instant::now();
+        // lava under the Tarnished (he stands where Mario does): SM64's lava boost
+        let lava = player_ref.chr_ins.modules.physics.material_info.hit_material == LAVA_MATERIAL;
         let result = worker::call("tick", move |ctx| {
+            if lava {
+                unsafe { sm64::sm64_er_lava(id) };
+            }
             if unstick {
                 // a floor just above his feet means he sank into it: put him on top
                 let [x, y, z] = stuck_at;
@@ -2110,6 +2373,10 @@ fn frame(data: &FD4TaskData) {
             if kills > 0 {
                 unsafe { sm64::sm64_mario_heal(id, (4 * kills).min(32) as u8) };
                 unsafe { sm64::sm64_play_sound_global(SOUND_COIN) };
+            }
+            if alive && flask_heal > 0 {
+                unsafe { sm64::sm64_mario_heal(id, flask_heal) };
+                unsafe { sm64::sm64_play_sound_global(SOUND_HEART) };
             }
             // Bowser's tail swing: Mario grabs the boss (SM64's pickup, swing and throw follow)
             if grab {
@@ -2144,8 +2411,9 @@ fn frame(data: &FD4TaskData) {
                 unsafe { sm64::sm64_play_sound_global(SOUND_HEART) };
             }
             unsafe {
-                sm64::sm64_er_addons_input(fludd_allowed as u32, cap_held as u32, spin_held as u32, air_dash as u32);
-                sm64::sm64_er_fludd_input(fludd_allowed as u32, fludd_held as u32, fludd_select, fludd_cycle as u32);
+                sm64::sm64_er_skate_input(skate_allowed as u32, skate_toggle as u32, skate_push as u32, skate_brake as u32, skate_ollie as u32, skate_steer, skate_trick);
+                sm64::sm64_er_addons_input(addons_allowed as u32, cap_held as u32, spin_held as u32, air_dash as u32);
+                sm64::sm64_er_fludd_input(addons_allowed as u32, fludd_held as u32, fludd_select, fludd_cycle as u32);
                 if rested { sm64::sm64_er_fludd_refill(); }
             }
             let mut state = sm64::SM64MarioState::default();
@@ -2156,6 +2424,7 @@ fn frame(data: &FD4TaskData) {
             ap_fludd::publish();
             ap_cappy::publish();
             ap_sonic::publish();
+            skate::publish();
             // SM64's sound engine runs at the same 30 Hz as Mario
             let mut buf = [0i16; 544 * 2 * 2];
             let frames = unsafe { sm64::sm64_audio_tick(audio::queued(), 1100, buf.as_mut_ptr()) } as usize;
@@ -2169,41 +2438,17 @@ fn frame(data: &FD4TaskData) {
             // peace sign: SM64 swapped the right hand's mesh (more triangles than the fist)
             let right_hand = tri_part[..ctx.geo.used()].iter().filter(|&&p| p == 9).count();
             let peace = right_hand > engine_mario::FIST_TRIANGLES;
-            // which eye texture SM64 is drawing (cells 5 open, 6 half, 7 closed, 8 dead): the median
-            // texture cell of this frame's eye triangles
-            let eye_cell = {
-                let uv = &ctx.geo.uv;
-                let mut eyes: Vec<f32> = (0..ctx.geo.used())
-                    .filter_map(|t| {
-                        let u = [uv[t * 6], uv[t * 6 + 2], uv[t * 6 + 4]];
-                        let mean = (u[0] + u[1] + u[2]) / 3.0;
-                        let span = u.iter().fold(f32::MIN, |a, &b| a.max(b)) - u.iter().fold(f32::MAX, |a, &b| a.min(b));
-                        (span > 1e-4 && (5.0 / 11.0..9.0 / 11.0).contains(&mean)).then_some(mean)
-                    })
-                    .collect();
-                eyes.sort_by(f32::total_cmp);
-                eyes.get(eyes.len() / 2).map(|m| (m * 11.0) as u8).unwrap_or(5)
-            };
-            let parts = engine_mario::relative_parts(&mats, count, state.position, eye_cell, peace);
+            let eye_cell = eye_cell(&ctx.geo.uv, ctx.geo.used());
+            let mut parts = engine_mario::relative_parts(&mats, count, state.position, eye_cell, peace);
+            if let (Some(parts), Some(progress)) = (parts.as_mut(), flask_pose) { engine_mario::flask_pose(parts, progress); }
+            let board = skate::visual();
+            if let Some(parts) = parts.as_mut().filter(|_| board.mounted) { engine_mario::skate_pose(parts, board.speed, board.airborne, board.lean, board.push_phase, board.trick, board.trick_progress); }
             let hits = if alive { combat::hits(id, &state, &target_pos, &no_stomp) } else { Vec::new() };
             (state, ctx.geo.position[..n].to_vec(), ctx.geo.color[..n].to_vec(), ctx.geo.normal[..n].to_vec(), parts, hits)
         });
         PERF.lock().unwrap_or_else(|e| e.into_inner()).tick_ms += tt.elapsed().as_secs_f32() * 1000.0;
         match result {
-            Some((mut state, mesh, colors, normals, mut parts, mut hits)) => {
-                let caster = collision::Caster { filter: PLAYER_MOVE_FILTER, origin: m.origin, player: player_ref };
-                let accepted = movement_guard::constrain(
-                    m.state.position, state.position,
-                    FOLLOWING.load(Ordering::Relaxed) || game_driven(current_anim(&player_ref.chr_ins)),
-                    |start, delta| caster.cast(start, delta),
-                );
-                if accepted != state.position {
-                    set_mario_position(m.id, accepted);
-                    state.position = accepted;
-                    hits = worker::call("guarded body hits", move |_| {
-                        if alive { combat::hits(id, &state, &guarded_target_pos, &guarded_no_stomp) } else { Vec::new() }
-                    }).unwrap_or_default();
-                }
+            Some((state, mesh, colors, normals, mut parts, mut hits)) => {
                 if alive && fludd_allowed {
                     let caster = collision::Caster { filter: m.filter, origin: m.origin, player: player_ref };
                     let water = ap_fludd::visual();
@@ -2217,6 +2462,11 @@ fn frame(data: &FD4TaskData) {
                             engine_mario::clip_squirt_stream(parts, fraction);
                             (start, clipped)
                         });
+                    let hover = parts.as_mut().filter(|_| water.enabled && water.active && water.selected_nozzle == ap_fludd::HOVER)
+                        .map(|parts| engine_mario::hover_segments(parts, state.position).map(|(start, end)| {
+                            let delta = std::array::from_fn(|i| end[i] - start[i]);
+                            (start, caster.cast(start, delta).unwrap_or(end))
+                        }));
                     let cap = ap_cappy::visual();
                     let sonic = ap_sonic::visual();
                     let addon_targets: Vec<_> = targets.iter().enumerate().map(|(index, t)| addon_hitboxes::Target {
@@ -2225,7 +2475,7 @@ fn frame(data: &FD4TaskData) {
                     let frame = addon_hitboxes::Frame {
                         tick: m.ticks, mario_previous: m.state.position, mario_current: state.position,
                         cap: (cap.enabled && cap.flying).then_some(cap.position),
-                        sonic_burst: (sonic.enabled && sonic.attack_state != 0).then_some(sonic.attack_generation), squirt,
+                        sonic_burst: (sonic.enabled && sonic.attack_state != 0).then_some(sonic.attack_generation), squirt, hover,
                     };
                     let addon = m.addon_hits.step(frame, &addon_targets, |start, contact| {
                         let delta = glam::Vec3::from_array(contact) - glam::Vec3::from_array(start);
@@ -2237,11 +2487,22 @@ fn frame(data: &FD4TaskData) {
                     let mut addon_damage: Vec<_> = addon.into_iter().map(|(i, kind)| (i, match kind {
                         addon_hitboxes::Kind::Cap => combat::Attack::Cap,
                         addon_hitboxes::Kind::Squirt => combat::Attack::Squirt,
+                        addon_hitboxes::Kind::Hover => combat::Attack::Hover,
                         addon_hitboxes::Kind::Sonic => combat::Attack::Sonic,
                     }, false)).collect();
                     addon_damage.append(&mut hits);
                     hits = addon_damage;
                 } else { m.addon_hits.reset(); }
+                // debug: Mario's centre crossing a loaded wall front to back in one tick
+                let step = glam::Vec3::from(state.position) - glam::Vec3::from(m.state.position);
+                if debug() && !FOLLOWING.load(Ordering::Relaxed) && step.length() < 200.0 {
+                    if let Some((wall, da, db)) = crossed_wall(&m.surfaces, m.state.position, state.position) {
+                        log(format!(
+                            "through a wall: action {:#x} fwd vel {:.1} moved {:.1}, distance {da:.1} -> {db:.1}, layer {:#x}",
+                            state.action, state.forward_velocity, step.length(), wall.force
+                        ));
+                    }
+                }
                 m.combat.deal(&player_ref.chr_ins, &targets, &hits, m.ticks);
                 m.prev_parts = m.parts.take();
                 m.parts = parts;
@@ -2509,7 +2770,8 @@ fn frame(data: &FD4TaskData) {
                     };
                     // (relative to where the step left him, not where it started: his parts would
                     // shift by each step's own movement)
-                    (state, engine_mario::relative_parts(&mats, count, state.position, 5, false))
+                    let eyes = eye_cell(&ctx.geo.uv, ctx.geo.used());
+                    (state, engine_mario::relative_parts(&mats, count, state.position, eyes, false))
                 });
                 if let Some((state, parts)) = parts {
                     FOLLOW_TRACE.lock().unwrap_or_else(|e| e.into_inner()).push(format!("{:x}/{}", state.action & 0x1FF, state.anim_id));
@@ -2539,8 +2801,9 @@ fn frame(data: &FD4TaskData) {
         }
     }
 
-    // F2 (debug): every Site of Grace unlocked (their "lit" event flags from BonfireWarpParam),
-    // for testing around the world. Offline Mario save only.
+    // F2 (debug): every Site of Grace unlocked (their "lit" event flags from BonfireWarpParam)
+    // and the whole map revealed (WorldMapPieceParam), for testing around the world.
+    // Offline Mario save only.
     {
         static F2_WAS: AtomicBool = AtomicBool::new(false);
         let f2 = debug_key(0x71);
@@ -2557,6 +2820,17 @@ fn frame(data: &FD4TaskData) {
                     }
                 }
                 log(format!("graces: {n} unlocked"));
+                let mut pieces = 0;
+                for i in 0..1000 {
+                    let Some(row) = repo.get_row_by_index::<eldenring::cs::WorldMapPieceParam>(i) else { break };
+                    for flag in [row.open_event_flag_id(), row.acquisition_event_flag_id()] {
+                        if flag != 0 {
+                            flags.virtual_memory_flag.set_flag(flag, true);
+                        }
+                    }
+                    pieces += 1;
+                }
+                log(format!("map: {pieces} pieces revealed"));
             }
         } else if !f2 {
             F2_WAS.store(false, Ordering::Relaxed);
@@ -2588,6 +2862,10 @@ fn frame(data: &FD4TaskData) {
                 log(format!("F5 probe: game ray (filter {:#x}) hits {:?}", m.filter, hit.map(|h| h.1)));
             }
             for line in m.havok.probe(p) {
+                log(line);
+            }
+            log("F5 bodies around Mario (6 m):");
+            for line in m.havok.bodies_around(p, 6.0) {
                 log(line);
             }
             for line in m.moving.describe(&m.havok, m.origin, m.state.position) {

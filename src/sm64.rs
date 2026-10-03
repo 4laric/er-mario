@@ -136,6 +136,13 @@ impl Drop for GeometryGuard<'_> {
 unsafe extern "C" {
     pub fn sm64_er_ap_set_capabilities(managed: u32, unlocked: u32);
     pub fn sm64_er_cappy_configure(enabled: u32, mask: u32);
+    // Worker-confined mode. Seven state words: enabled,mounted,air,trick,bail,
+    // push_phase(0idle/1..24),trick_ticks(0..20). Three motion floats: speed,
+    // signed lean,trick progress(0..1). Trick input0released/2kickflip/3shuvit; fresh airborne presses only.
+    pub fn sm64_er_skate_configure(enabled: u32);
+    pub fn sm64_er_skate_reset();
+    pub fn sm64_er_skate_input(allowed: u32, toggle: u32, push: u32, brake: u32, ollie: u32, steer: f32, trick: u32);
+    pub fn sm64_er_skate_get_state(out: *mut u32, motion: *mut f32);
     pub fn sm64_er_sonic_configure(enabled: u32, mask: u32);
     pub fn sm64_er_addons_input(allowed: u32, cap_held: u32, spin_held: u32, dash: u32);
     pub fn sm64_er_cappy_get_state(out: *mut u32, visual: *mut f32);
@@ -182,6 +189,7 @@ unsafe extern "C" {
     /// er-mario patch: SM64's C-up head look (radians, relative to his body; active 0 = off)
     pub fn sm64_er_set_head(active: i32, pitch: f32, yaw: f32);
     pub fn sm64_er_set_ladder(rate: f32);
+    pub fn sm64_er_lava(id: i32);
     pub fn sm64_er_pick_up(id: i32);
     pub fn sm64_er_held(id: i32, pos: *mut f32) -> i32;
     pub fn sm64_er_drop(id: i32);

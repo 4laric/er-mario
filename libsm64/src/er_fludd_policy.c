@@ -1,11 +1,11 @@
 #include "er_fludd.h"
-struct ERFludd er_fludd = {0,0,0,0,0,60,0,0,0,0,0,0,0,0};
+struct ERFludd er_fludd = {0,0,0,0,0,300,0,0,0,0,0,0,0,0};
 static uint32_t first(uint32_t mask) { return mask & (0u-mask); }
 void er_fludd_configure(uint32_t enabled, uint32_t mask, uint32_t level) {
     if (enabled > 1 || (mask & ~15u) || level > 3 || (!enabled && (mask || level))) return;
     if (er_fludd.enabled == enabled && er_fludd.mask == mask && er_fludd.level == level) return;
     er_fludd.enabled = enabled; er_fludd.mask = mask; er_fludd.level = level;
-    er_fludd.capacity = 60 + 20 * level;
+    er_fludd.capacity = 300 + 100 * level;
     if (er_fludd.water > er_fludd.capacity) er_fludd.water = er_fludd.capacity;
     if (!(mask & er_fludd.selected)) { er_fludd.selected = first(mask); er_fludd.active = er_fludd.charge = 0; }
     if (!enabled) er_fludd.water = er_fludd.selected = er_fludd.protected_fall = 0;

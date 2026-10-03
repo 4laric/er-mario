@@ -207,6 +207,8 @@ static WEDGES: AtomicU8 = AtomicU8::new(0xFF);
 static DEATHS: AtomicU32 = AtomicU32::new(0);
 static COINS: AtomicU32 = AtomicU32::new(0);
 static STARS: AtomicU32 = AtomicU32::new(0);
+// Pack both flask counts in one snapshot so rendering cannot mix frames.
+static FLASK: AtomicU32 = AtomicU32::new(0);
 /// when the Mario frame last reported (the HUD goes when it stops, e.g. on a loading screen)
 static LAST_SET: Mutex<Option<Instant>> = Mutex::new(None);
 
@@ -239,6 +241,11 @@ pub fn set_counters(deaths: u32, coins: u32, stars: u32) {
     DEATHS.store(deaths, Ordering::Relaxed);
     COINS.store(coins, Ordering::Relaxed);
     STARS.store(stars, Ordering::Relaxed);
+}
+
+/// Updates the Crimson flask counter; a zero capacity hides its label.
+pub fn set_flask(current: u32, max: u8) {
+    FLASK.store(current.min(u32::from(max)) | (u32::from(max) << 8), Ordering::Relaxed);
 }
 
 /// An enemy health bar (combat.rs): feet position, HP now and before the combo (0..1), combo damage.
@@ -410,10 +417,10 @@ impl ImguiRenderLoop for Overlay {
         // outside the world (title screen, menus, loading): which mod is loaded, bottom left, in
         // SM64's HUD font (it has no dot: a small square at the baseline); only once Mario's files are
         // built and loaded this session (not during the first-launch setup)
-        if !crate::in_world() && crate::assets::ready() {
-            let g = 10.0 * size[1] / 240.0 * SIZE;
-            let (mut x, y) = (size[1] * 0.04, size[1] * 0.96 - g);
-            for c in concat!("ER MARIO ", env!("CARGO_PKG_VERSION")).chars() {
+        let g = 10.0 * size[1] / 240.0 * SIZE;
+        let text = |text: &str, y: f32, g: f32| {
+            let mut x = size[1] * 0.04;
+            for c in text.chars() {
                 match c {
                     ' ' => x += g * 0.5,
                     '.' => {
@@ -429,6 +436,14 @@ impl ImguiRenderLoop for Overlay {
                     }
                 }
             }
+        };
+        if !crate::in_world() && crate::assets::ready() {
+            let y = size[1] * 0.96 - g;
+            text(concat!("ER MARIO ", env!("CARGO_PKG_VERSION")), y, g);
+            // smaller, right above the version
+            if let Some(v) = crate::update::newer() {
+                text(&format!("UPDATE AVAILABLE {v}"), y - g * 1.1, g * 0.75);
+            }
         }
 
         // nothing outside Mario mode, in menus, or when the Mario frame stopped (loading)
@@ -436,6 +451,10 @@ impl ImguiRenderLoop for Overlay {
         let alive = LAST_SET.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|t| t.elapsed().as_secs_f32() < 0.5);
         if wedges == 0xFF || !alive {
             return;
+        }
+        // in game: a small note in the bottom left corner once a newer version is out
+        if let Some(v) = crate::update::newer() {
+            text(&format!("ER MARIO {v} IS OUT"), size[1] * 0.985 - g * 0.5, g * 0.5);
         }
 
         // the coins in the world (up to 40 m away): SM64's 64 units = 0.64 m
@@ -482,10 +501,28 @@ impl ImguiRenderLoop for Overlay {
         }
 
         let fludd = crate::ap_fludd::visual();
-        if fludd.enabled {
+        let board = crate::skate::visual();
+        if board.enabled {
+            let label = if board.mounted {
+                format!("Skate {:.1} m/s  {}  X ollie / airborne: RB flip, LT shuv-it", board.speed * 0.30, match board.trick { 2 => "Kickflip", 3 => "Shuv-it", 1 => "Ollie", _ => "A push / B brake" })
+            } else if board.bail_ticks > 0 {
+                "Skate: recover before remounting".into()
+            } else { "Skate: D-pad Left / V to mount".into() };
+            dl.add_text([size[0] * 0.5 + 50.0 * px, size[1] - 110.0 * px], [0.9, 0.85, 0.35, 1.0], label);
+        }
+        if fludd.enabled && !board.mounted {
             let name = match fludd.selected_nozzle { 1 => "Hover", 2 => "Rocket", 4 => "Turbo", 8 => "Squirt", _ => "Locked" };
             dl.add_text([size[0] * 0.5 + 50.0 * px, size[1] - 65.0 * px], [0.3, 0.85, 1.0, 1.0],
                 format!("FLUDD {name} {}/{}  RB / J", fludd.water_units, fludd.capacity_units));
+        }
+
+        let flask = FLASK.load(Ordering::Relaxed);
+        let flask_max = flask >> 8;
+        if flask_max > 0 && !board.mounted {
+            // Share the addon column, with a separate row beneath FLUDD when it is enabled.
+            let y = size[1] - 65.0 * px + if fludd.enabled { (10.0 * px).max(20.0) } else { 0.0 };
+            dl.add_text([size[0] * 0.5 + 50.0 * px, y], [1.0, 0.45, 0.4, 1.0],
+                format!("Flask {}/{}  X / R", flask & 0xFF, flask_max));
         }
 
         // enemy health bars (Elden Ring's style: dark frame, red HP, yellow for the combo's damage)

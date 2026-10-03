@@ -174,6 +174,39 @@ fn find_text(text: &str) -> Vec<(usize, usize)> {
     out
 }
 
+/// Temporarily shows `replacement` for message `id` of FMG `binder`. Returns the patch to undo
+/// with `restore`, or None while that text isn't loaded.
+pub fn override_id(binder: usize, id: i32, replacement: &str) -> Option<(usize, u64)> {
+    let repo = unsafe { MsgRepositoryImp::instance() }.ok()?;
+    let table = explore::read_u64(repo as *const _ as usize + 8).and_then(|l| explore::read_u64(l as usize))?;
+    let fmg = explore::read_u64(table as usize + binder * 8).filter(|&p| p != 0)? as usize;
+    if !explore::readable(fmg, 0x40) {
+        return None;
+    }
+    let ranges = unsafe { *((fmg + 0xC) as *const u32) } as usize;
+    let offsets = unsafe { *((fmg + 0x18) as *const usize) };
+    if ranges > 100_000 || !explore::readable(offsets, 8) {
+        return None;
+    }
+    for r in 0..ranges {
+        let e = fmg + 0x28 + r * 0x10;
+        let (index, first, last) = unsafe { (*(e as *const i32), *((e + 4) as *const i32), *((e + 8) as *const i32)) };
+        if id < first || id > last {
+            continue;
+        }
+        let slot = offsets + (index + (id - first)) as usize * 8;
+        if !explore::readable(slot, 8) {
+            return None;
+        }
+        let wide: Vec<u16> = replacement.encode_utf16().chain([0]).collect();
+        let string = Box::leak(wide.into_boxed_slice()).as_ptr() as usize;
+        let original = unsafe { *(slot as *const u64) };
+        unsafe { *(slot as *mut u64) = string.wrapping_sub(fmg) as u64 };
+        return Some((slot, original));
+    }
+    None
+}
+
 /// Temporarily shows `replacement` wherever the game would show `text`. Returns the patches to
 /// undo with `restore`.
 pub fn override_text(text: &str, replacement: &str) -> Vec<(usize, u64)> {

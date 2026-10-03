@@ -11,7 +11,7 @@
 //! doors and deaths.
 
 use std::sync::Mutex;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use eldenring::cs::CSCamera;
 use fromsoftware_shared::FromStatic;
@@ -27,6 +27,8 @@ const STEP: f32 = std::f32::consts::FRAC_PI_4;
 
 /// On by default; `camera = elden` in er_mario.ini starts with Elden Ring's camera (F9 switches).
 pub static ON: AtomicBool = AtomicBool::new(true);
+/// Frame-owned snapshot used by input routing; native lock-on owns the right stick.
+pub static TARGET_LOCKED: AtomicBool = AtomicBool::new(false);
 
 pub fn load_setting() {
     if crate::paths::config("camera").is_some_and(|v| v.eq_ignore_ascii_case("elden")) {
@@ -53,6 +55,15 @@ pub fn hold() {
 }
 
 pub fn reapply() {
+    // Lock-on can start after Mario's frame but before CameraStep. Do not write
+    // a cached free-camera matrix over the native target camera on that frame.
+    if let Some(player) = (unsafe { eldenring::cs::WorldChrMan::instance() }).ok().and_then(|w| w.main_player.as_ref()) {
+        if player.chr_ins.is_locked_on {
+            TARGET_LOCKED.store(true, Ordering::Relaxed);
+            reset();
+            return;
+        }
+    }
     // only this frame's (not a stale one when the Mario frame stopped, e.g. loading)
     let Some((v, at)) = *LAST.lock().unwrap_or_else(|e| e.into_inner()) else { return };
     static GAP: AtomicBool = AtomicBool::new(false);

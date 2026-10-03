@@ -30,6 +30,7 @@ pub enum Attack {
     Dash,
     Cap,
     Squirt,
+    Hover,
     Sonic,
 }
 
@@ -44,7 +45,7 @@ impl Attack {
             Attack::Stomp => (69, 998, 250, 35.0, 2, 0.8),
             Attack::Dash => (70, 999, 175, 25.0, 2, 0.8),
             // Remote addon hits reuse the existing reaction rows; no new param slots.
-            Attack::Cap | Attack::Squirt => Attack::Punch.spec(),
+            Attack::Cap | Attack::Squirt | Attack::Hover => Attack::Punch.spec(),
             Attack::Sonic => Attack::Dash.spec(),
         }
     }
@@ -59,7 +60,8 @@ impl Attack {
             Attack::Stomp => (50.0, "damage_stomp"),
             Attack::GroundPound => (67.0, "damage_ground_pound"),
             Attack::Cap => (20.0, "damage_cap"),
-            Attack::Squirt => (3.0, "damage_squirt"),
+            Attack::Squirt => (12.0, "damage_squirt"),
+            Attack::Hover => (6.0, "damage_hover"),
             Attack::Sonic => (34.0, "damage_sonic"),
         }
     }
@@ -282,8 +284,9 @@ pub fn nearby(center: &HavokPosition, range: f32, origin: [f32; 3]) -> Vec<Targe
             let ph = &chr.modules.physics;
             let r = ph.hit_radius.max(ph.chr_hit_radius);
             let h = ph.hit_height.max(ph.chr_hit_height);
-            let radius = if r.is_finite() && r > 0.1 { (r * 100.0).clamp(40.0, 300.0) } else { TARGET_RADIUS };
-            let height = if h.is_finite() && h > 0.3 { (h * 100.0).clamp(80.0, 800.0) } else { TARGET_HEIGHT };
+            // (up to giant size: capped at 3 m the Fire Giant's ankles were outside his own body)
+            let radius = if r.is_finite() && r > 0.1 { (r * 100.0).clamp(40.0, 1500.0) } else { TARGET_RADIUS };
+            let height = if h.is_finite() && h > 0.3 { (h * 100.0).clamp(80.0, 4000.0) } else { TARGET_HEIGHT };
             {
                 static SEEN: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
                 let key = handle_key(&chr.field_ins_handle);
@@ -412,16 +415,23 @@ pub fn tags() -> Vec<crate::hud::Tag> {
 pub fn impact(combat: &mut Combat, handle: &FieldInsHandle, pct: f32, tick: u32) {
     let Ok(wcm) = (unsafe { WorldChrMan::instance_mut() }) else { return };
     let Some(chr) = wcm.chr_ins_by_handle_mut(handle) else { return };
+    // An alternate boss body (e.g. Fire Giant phase one) shares its bar;
+    // an ordinary thrown enemy must not damage an unrelated visible boss.
+    let alternate_boss = !is_boss(handle) && boss_class(handle, chr);
     let data = &mut chr.modules.data;
     let (hp, max) = (data.hp, data.max_hp.max(1));
     let dmg = crate::ap_stats::percent_damage(max, pct);
     // (throws kill right there when the impact takes the rest of his HP)
     data.hp = (hp - dmg).max(0);
-    show_damage(handle, hp, hp - data.hp, true);
+    let dealt = hp - data.hp;
+    show_damage(handle, hp, dealt, true);
     if data.hp == 1 {
         combat.finishing.entry(handle_key(handle)).or_insert((*handle, tick));
     }
     combat.victims.insert(handle_key(handle), (*handle, tick));
+    if alternate_boss {
+        pass_to_bar(wcm, dealt);
+    }
 }
 
 /// The bosses on screen (their boss bars).
@@ -480,6 +490,22 @@ pub fn bosses() -> Vec<crate::hud::BossBar> {
         .collect()
 }
 
+/// Damage to a boss body that isn't the one on the boss bar (the Fire Giant's first phase: the
+/// bar is his second-phase character, with about twice the HP, and the game passes each hit on
+/// to it): the bar's character loses the same HP, or the bar stood still for the whole first phase.
+fn pass_to_bar(wcm: &mut WorldChrMan, dealt: i32) {
+    let on_bar: Vec<FieldInsHandle> = unsafe { eldenring::cs::CSFeManImp::instance() }
+        .map(|fe| fe.boss_health_displays.iter().filter(|e| !e.field_ins_handle.is_empty()).map(|e| e.field_ins_handle.clone()).collect())
+        .unwrap_or_default();
+    let [only] = on_bar.as_slice() else { return };
+    let Some(main) = wcm.chr_ins_by_handle_mut(only).filter(|c| !own_side(c.team_type) && c.modules.data.hp > 1) else { return };
+    let d = &mut main.modules.data;
+    let hp = d.hp;
+    d.hp = (hp - dealt).max(1);
+    show_damage(only, hp, hp - d.hp, true);
+    log(format!("combat: passed on to the boss bar's character: {dealt} of {} HP, {} left", d.max_hp, d.hp));
+}
+
 /// Takes the attack's share of the character's max HP (never the last point: the bullet deals the
 /// final blow, so the kill is the game's own). Returns true if it's down to that last point.
 fn take_share(handle: &FieldInsHandle, attack: Attack) -> bool {
@@ -510,7 +536,7 @@ fn take_share(handle: &FieldInsHandle, attack: Attack) -> bool {
             Attack::Kick | Attack::Sweep => crate::swing::STANCE_KICK,
             Attack::Punch | Attack::Cap => crate::swing::STANCE_PUNCH,
             // A water stream chips HP without repeatedly breaking boss stance.
-            Attack::Squirt => 0.0,
+            Attack::Squirt | Attack::Hover => 0.0,
         });
     }
     let data = &mut chr.modules.data;
@@ -519,7 +545,11 @@ fn take_share(handle: &FieldInsHandle, attack: Attack) -> bool {
     data.hp = (hp - dmg).max(1);
     show_damage(handle, hp, hp - data.hp, bar);
     log(format!("combat: {:?} on team {team}{}: {dmg} of {max} HP ({pct:.1}%), {} left", attack as u8, if boss { " boss" } else { "" }, data.hp));
-    data.hp == 1
+    let (last, dealt) = (data.hp == 1, hp - data.hp);
+    if boss && !bar {
+        pass_to_bar(wcm, dealt);
+    }
+    last
 }
 
 /// Target body in SM64 units: horizontal radius and height (a human-sized capsule).
@@ -614,7 +644,7 @@ impl Combat {
                 }
                 // a regular enemy punched or dived into from behind: Mario picks it up like a
                 // Bob-omb (carry.rs)
-                let remote = matches!(attack, Attack::Cap | Attack::Squirt | Attack::Sonic);
+                let remote = matches!(attack, Attack::Cap | Attack::Squirt | Attack::Hover | Attack::Sonic);
                 if !remote && (matches!(attack, Attack::Punch) || diving) && liftable(handle) {
                     let me = player.modules.physics.position;
                     if crate::carry::try_pick_up(handle, glam::Vec3::new(me.0, me.1, me.2), target.radius / 100.0, target.height / 100.0) {

@@ -5,6 +5,8 @@ struct MarioState;
 struct ERCappy {
     uint32_t enabled, mask, allowed, held, previous, needs_release, phase, age, bounced;
     float position[3], direction[3], spin_yaw;
+    /* Snapshot at throw, bounded before every segment is swept. */
+    float velocity[3];
 };
 struct ERSonic {
     uint32_t enabled, mask, allowed, held, dash, previous_dash, needs_release;

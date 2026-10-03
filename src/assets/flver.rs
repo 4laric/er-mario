@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use super::model::{MarioModel, Tri};
 
 /// SM64 part -> FLVER bone (bones the chest piece skins natively); same list as engine_mario.rs.
-pub const PART_BONES: [&str; 30] = [
+pub const PART_BONES: [&str; 32] = [
     "",
     "Pelvis_Mantle",
     "Spine2",
@@ -40,9 +40,13 @@ pub const PART_BONES: [&str; 30] = [
     "L_UpArmTwist1",
     "L_Thigh_Skirt",
     "R_Thigh_Skirt",
-    // Detachable original cap and authored Cappy eyes (safe leaf skin bones).
+    // Detachable original cap and native uncapped head (safe leaf skin bones).
     "R_Hand",
     "L_Hand",
+    // Small flask: verified unused leaf skin bone.
+    "L_Calf",
+    // Board uses a separate verified leaf so drinking never reveals it.
+    "R_Calf",
 ];
 /// SM64 units -> metres, times Mario's 0.25 model scale
 const UNIT: f64 = 0.01 * 0.25;
@@ -307,13 +311,14 @@ pub fn mario_vertices(model: &MarioModel) -> (Vec<Vertex>, Vec<[u16; 3]>) {
         let tex = textured(t);
         let mu = mean_u(t);
         let cells = CELLS as f32;
-        // the export caught Mario mid-blink: its eye triangles use the closed-eyes texture (cell 7)
-        let eye = tex && part == 3 && 5.5 / cells <= mu && mu < 8.0 / cells;
-        let cell = if eye {
-            7
-        } else {
-            (mu * cells).clamp(0.0, cells - 1.0) as usize
-        };
+        // Both native heads have the same eye patch. Share the capped head's four
+        // blink variants and omit the bare head's duplicate eye triangles.
+        let eye_texture = tex && 5.0 / cells <= mu && mu < 9.0 / cells;
+        if part == super::cappy::BARE_HEAD && eye_texture {
+            continue;
+        }
+        let eye = part == 3 && eye_texture;
+        let cell = (mu * cells).clamp(0.0, cells - 1.0) as usize;
         let copies: Vec<(usize, Option<usize>)> = if eye {
             EYE_PARTS
                 .iter()
@@ -335,7 +340,7 @@ pub fn mario_vertices(model: &MarioModel) -> (Vec<Vertex>, Vec<[u16; 3]>) {
                 ];
                 let mut uv = mario_uv(&colors, t.color[0], t.uv[k], tex, cell);
                 if let Some(c) = eye_cell {
-                    uv[0] += (c as f64 - 7.0) * TILE as f64 / TEX;
+                    uv[0] += (c as f64 - cell as f64) * TILE as f64 / TEX;
                 }
                 let key = (
                     owner,
@@ -362,7 +367,7 @@ pub fn mario_vertices(model: &MarioModel) -> (Vec<Vertex>, Vec<[u16; 3]>) {
         }
     }
     super::fludd::append(&mut verts, &mut tris);
-    super::cappy::append(&mut verts, &mut tris);
+    super::addons::append(&mut verts, &mut tris);
     (verts, tris)
 }
 

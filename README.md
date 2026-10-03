@@ -38,9 +38,36 @@ work through Steam Input, which Steam turns on for them by default.
 
 **Stay offline.** me3 starts the game offline with anti-cheat off. Never play this mod online.
 
+## Camera lock-on (experimental AP fork builds)
+
+Native target lock-on is available with **Right Stick Click** or **Q** (default
+Elden Ring bindings). While locked, Elden Ring's camera frames the target and the
+right stick switches targets. Unlocking returns to the selected free camera;
+**F9** still switches that choice between Lakitu and Elden Ring. Mario's movement
+and attacks keep their normal direction rather than automatically aiming at the target.
+
+## Crimson Flasks (experimental AP fork builds)
+
+Crimson Flasks now heal Mario using the game's normal charges. Equip a Crimson Flask
+in a quick slot and press **X** on a controller or **R** on the keyboard; **B** remains
+Mario's punch/grab/throw. D-pad Down selects the next quick item; pouch flask use
+also follows the native game path. Drinking raises a little amber flask to his mouth,
+stops Mario's movement and addon inputs, and leaves him vulnerable to interruption.
+Only a successfully consumed Crimson charge heals: empty attempts and Cerulean
+Flasks do not refill Mario's health. The base flask heals two wedges, increasing with
+native potency to about six and a half at +12, capped by Mario's health capacity.
+No Flask traps and native flask recovery modifiers also apply.
+
+Archipelago's existing **Progressive Flask Upgrade** supplies additional charges
+and Sacred Tears; upgrade potency at a grace as usual. Mario reads the actual flask
+without a separate AP item, charge pool or item-ID swap. Rests and native refills
+restore charges normally. This build changes generated assets and requires the
+usual setup restart before the flask model appears.
+
 ## FLUDD (experimental AP fork builds)
 
 This fork includes an original FLUDD backpack with Hover, Rocket, Turbo and Squirt nozzles.
+
 Set `fludd = on` in `er_mario.ini` to enable all four for standalone play. Archipelago
 controls FLUDD and its unlocks when connected; enable `mario_fludd` in your player YAML.
 These changes are development builds, not part of the upstream release linked above.
@@ -50,11 +77,12 @@ Hold **RB** to use the selected nozzle. While holding RB, **D-pad Up** selects H
 On keyboard, hold **J** to use FLUDD and press **I** to cycle nozzles. Rocket and Turbo
 charge before firing; ordinary jump, attack and crouch inputs take priority.
 
-The HUD shows the selected nozzle and water remaining. Release FLUDD and stand still
-on the ground to refill gradually; resting at a grace or respawning refills the tank.
-AP tank upgrades increase capacity from 60 to 80, 100 and 120 without refilling water.
+The HUD shows the selected nozzle and water remaining. Release FLUDD while safely
+grounded to refill gradually, including while walking; resting at a grace or respawning
+refills the tank. Airborne movement and active nozzles do not refill water. The base tank
+holds 300 water; AP tank upgrades add 100 each, reaching 400, 500 and 600 without refilling water.
 Squirt sprays forward while ordinary movement continues; its short stream damages nearby
-targets and stops at map geometry. The current AP item pool unlocks the three traversal
+targets and stops at map geometry. Hover jets can damage targets below Mario. The current AP item pool unlocks the three traversal
 nozzles; Squirt is available in standalone play. Jets, charging and launches use SM64 audio.
 
 The backpack adds generated model parts. On the first start with this build, allow
@@ -67,24 +95,29 @@ Archipelago seeds use `mario_cappy` and `mario_sonic_movement`; all options defa
 and can coexist with FLUDD. These development builds keep Mario's appearance and add
 original movement implementations inspired by Odyssey and Sonic.
 
-**Cappy:** press **RT** or **O** to throw the cap. Hold to hover briefly, then release
-to recall it; it also returns automatically. Land on the deployed cap while descending
+**Cappy:** tap **RT** or **O** to throw the cap; tap again to recall it early.
+It stays deployed on its own timer and then returns automatically. Throws retain Mario's
+movement momentum. Land on the deployed cap while descending
 to bounce. One cap bounce is available per real landing on the ground. AP seeds unlock
-Cap Throw and Cap Bounce separately. The cap has eyes and leaves Mario's head when
-thrown. Its swept hitbox damages each target once per throw. Enemy capture is not included.
+Cap Throw and Cap Bounce separately. Mario keeps his original SM64 capped head at rest
+and switches to his native uncapped head while the original cap flies, without added eyes.
+Its swept hitbox damages each target once per throw. Enemy capture is not included.
 
-**Sonic movement:** hold **Left Stick Click** or **U** while grounded to charge Spin
-Dash, then release. Hold it in the air to charge Drop Dash for the next landing. Press
-**Right Stick Click** or **P** to Air Dash once per airtime; landing on the ground
+**Sonic movement:** hold **Left Stick Click** or **U** while stationary on the ground
+to charge Spin Dash, then release. Its spinning charge animation ramps from 1x to a
+maximum of 3x speed; Mario does not drift during charging. Hold it in the air to charge
+Drop Dash for the next landing. Press
+**LT** or **P** to Air Dash once per airtime; landing on the ground
 restores it. Cap bounces and FLUDD do not restore the aerial moves. AP seeds unlock
 the three moves separately. Charge and dash use a spinning animation and SM64 sounds.
 Only actual dash movement damages targets, once per target per burst; charging does not.
 Homing attack is not included.
 
 Addon damage follows ordinary Mario combat, including boss scaling, AP damage upgrades,
-enemy hit reactions and kill credit. Defaults are 20% for the cap, 3% per Squirt hit (at
-most once every 12 simulation ticks), and 34% for Sonic dashes, relative to a normal enemy's
-maximum HP. `damage_cap`, `damage_squirt` and `damage_sonic` in `er_mario.ini` override these
+enemy hit reactions and kill credit. Defaults are 20% for the cap, 12% per Squirt hit,
+6% per Hover-jet hit (water hits repeat
+at most once every 12 simulation ticks), and 34% for Sonic dashes, relative to a normal enemy's
+maximum HP. `damage_cap`, `damage_squirt`, `damage_hover` and `damage_sonic` in `er_mario.ini` override these
 percentages. Addon hits never initiate enemy or boss grabs.
 
 Menus, loss of focus, death and incompatible actions cancel addon input. The AP console
@@ -125,17 +158,40 @@ to blank it out.
   and saves keep working.
 - The `libsm64` folder is libsm64 with a few patches for the mod (ladder climbing, carrying,
   dive grabs, head turning, model part export), compiled into the DLL.
+- At launch and every 5 minutes after, the mod asks GitHub for the latest release's version. The
+  title screen, and a small note in the bottom left corner in game, say when there's a newer one.
+  Nothing is downloaded or installed automatically. `update_check = off` in er_mario.ini turns the
+  check off.
 
 ## Building
 
+### Experimental skating
+
+Set `skateboard = on` in `er_mario.ini`. **D-pad Left / V** mounts or dismounts
+while safely grounded; **RB + D-pad Left** still selects FLUDD Squirt.
+On the board, hold **A / L / right mouse** to push, use the **left stick / A-D**
+to carve, hold **B / comma / left mouse** to brake, and press **X / R** to ollie.
+After takeoff, press **RB / J** alone for a kickflip or **LT / P** alone
+for a shuv-it. One board trick is allowed per airtime; it adds no lift or speed.
+Release trick buttons before takeoff, then press one in midair. Mario pushes
+with his rear foot, then tucks his feet while the board flips or turns beneath him.
+The board carries momentum, accelerates downhill, and uses Mario's native ground
+and airborne collision steps. Landing retains speed. Hits, forced actions, menus
+and travel dismount; release the mount button before mounting again.
+FLUDD, Cappy, Sonic and flask input are suspended while riding. **R3 / Q** still
+locks on; dismount to use Mario's normal moves and drink a flask.
+
+This is an original Skate-inspired riding controller and procedural board, with
+no Skate 3 code or assets. It implements riding, foot pushes, ollies, kickflips and shuv-its; manuals,
+rail grinding and Skate 3 physics parity are not implemented.
+Asset version 7 requires a one-time model rebuild and restart on update.
+
 Windows, with [Rust](https://rustup.rs), Visual Studio Build Tools (C++),
 [LLVM](https://github.com/llvm/llvm-project/releases) (clang-cl compiles libsm64's C code) and
-Python. fromsoftware-rs sits next to this repository:
+Python. Cargo fetches fromsoftware-rs itself (pinned to a commit in `Cargo.toml`):
 
 ```
 git clone https://github.com/deltarooo/er-mario
-git clone https://github.com/vswarte/fromsoftware-rs
-git -C fromsoftware-rs checkout 59fbd3b
 cd er-mario/libsm64
 python import-mario-geo.py
 cd ..

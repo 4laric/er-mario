@@ -4,13 +4,15 @@ use std::collections::{HashMap, HashSet};
 
 const CAP_RADIUS: f32 = 30.0;
 const SONIC_RADIUS: f32 = 45.0;
-const WATER_RADIUS: f32 = 12.0;
+const SQUIRT_RADIUS: f32 = 45.0;
+const HOVER_RADIUS: f32 = 60.0;
 const WATER_INTERVAL: u32 = 12;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Cap,
     Squirt,
+    Hover,
     Sonic,
 }
 
@@ -32,6 +34,7 @@ pub struct Frame {
     /// Only present on an actual dash movement step; identifies its native burst.
     pub sonic_burst: Option<u32>,
     pub squirt: Option<([f32; 3], [f32; 3])>,
+    pub hover: Option<[([f32; 3], [f32; 3]); 2]>,
 }
 
 #[derive(Default)]
@@ -108,11 +111,24 @@ impl Hitboxes {
             }
             if let Some((start, end)) = frame.squirt {
                 if !self.water_hits.contains_key(&target.key)
-                    && swept_sphere(start, end, WATER_RADIUS, target, 0.0, 0.0)
+                    && swept_sphere(start, end, SQUIRT_RADIUS, target, 0.0, 0.0)
                     && visible(start, contact(start, target))
                 {
                     self.water_hits.insert(target.key, frame.tick);
                     out.push((target.index, Kind::Squirt));
+                }
+            }
+            if let Some(jets) = frame.hover {
+                if !self.water_hits.contains_key(&target.key)
+                    && jets.iter().any(|&(start, end)| {
+                        swept_sphere(start, end, HOVER_RADIUS, target, 0.0, 0.0)
+                            && visible(start, contact(start, target))
+                    })
+                {
+                    // Two jets are one water attack. Squirt and Hover share the
+                    // receipt, so nozzle changes cannot bypass its 12-tick limit.
+                    self.water_hits.insert(target.key, frame.tick);
+                    out.push((target.index, Kind::Hover));
                 }
             }
         }
@@ -196,6 +212,7 @@ mod tests {
             cap: None,
             sonic_burst: None,
             squirt: None,
+            hover: None,
         }
     }
     fn target() -> Target {
@@ -316,6 +333,73 @@ mod tests {
             }),
             [(4, Kind::Squirt)]
         );
+    }
+    #[test]
+    fn squirt_covers_a_wider_spray_but_still_has_a_finite_edge() {
+        let mut h = Hitboxes::new();
+        let mut f = frame(0);
+        f.squirt = Some(([0.0, 90.0, 0.0], [0.0, 90.0, 400.0]));
+        let mut t = target();
+        t.radius = 10.0;
+        t.feet = [54.0, 0.0, 200.0];
+        assert_eq!(h.step(f, &[t], |_, _| true), [(4, Kind::Squirt)]);
+        h.reset();
+        t.feet[0] = 56.0;
+        assert!(h.step(f, &[t], |_, _| true).is_empty());
+    }
+    fn hover_jets() -> [([f32; 3], [f32; 3]); 2] {
+        [
+            ([-22.0, 150.0, 0.0], [-22.0, 50.0, 0.0]),
+            ([22.0, 150.0, 0.0], [22.0, 50.0, 0.0]),
+        ]
+    }
+    #[test]
+    fn hover_hits_below_mario_once_for_two_jets_and_respects_height() {
+        let mut h = Hitboxes::new();
+        let mut f = frame(0);
+        f.mario_current = [0.0, 100.0, 0.0];
+        f.hover = Some(hover_jets());
+        let mut t = target();
+        t.height = 40.0;
+        assert_eq!(h.step(f, &[t], |_, _| true), [(4, Kind::Hover)]);
+        assert!(h.step(f, &[t], |_, _| true).is_empty());
+        h.reset();
+        t.feet[1] = -120.0;
+        assert!(h.step(f, &[t], |_, _| true).is_empty());
+        t.feet[1] = 220.0;
+        assert!(h.step(f, &[t], |_, _| true).is_empty());
+    }
+    #[test]
+    fn hover_and_squirt_share_the_water_cooldown_across_nozzle_changes() {
+        let mut h = Hitboxes::new();
+        let mut f = frame(0);
+        f.squirt = Some(([-400.0, 90.0, 0.0], [400.0, 90.0, 0.0]));
+        assert_eq!(h.step(f, &[target()], |_, _| true), [(4, Kind::Squirt)]);
+        f.squirt = None;
+        f.hover = Some(hover_jets());
+        for tick in 1..12 {
+            f.tick = tick;
+            assert!(h.step(f, &[target()], |_, _| true).is_empty());
+        }
+        f.tick = 12;
+        assert_eq!(h.step(f, &[target()], |_, _| true), [(4, Kind::Hover)]);
+        f.tick = 13;
+        f.hover = None;
+        f.squirt = Some(([-400.0, 90.0, 0.0], [400.0, 90.0, 0.0]));
+        assert!(h.step(f, &[target()], |_, _| true).is_empty());
+    }
+    #[test]
+    fn each_hover_jet_needs_visibility_and_occlusion_does_not_burn_a_receipt() {
+        let mut h = Hitboxes::new();
+        let mut f = frame(0);
+        f.hover = Some(hover_jets());
+        assert!(h.step(f, &[target()], |_, _| false).is_empty());
+        // The left jet is behind a wall; the independently visible right jet hits.
+        assert_eq!(
+            h.step(f, &[target()], |start, _| start[0] > 0.0),
+            [(4, Kind::Hover)]
+        );
+        assert!(h.step(f, &[target()], |_, _| true).is_empty());
     }
     #[test]
     fn air_dash_after_rolling_is_a_new_burst_but_charge_is_not_an_attack() {

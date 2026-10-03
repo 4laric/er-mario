@@ -1,8 +1,9 @@
 # Rock and moving-platform collision
 
 `collision_geometry.rs` verifies the production winding conversion after X reflection:
-floors stay floors, ceilings stay ceilings, rock faces keep their exterior, inconsistent convex
-face indices become outward, and quantized degenerate triangles are dropped.
+walls keep their exterior regardless of Mario's position; floor/ceiling candidates preserve
+upstream's Mario-height orientation correction, including reversed ground meshes and clamped
+long ramps. Convex face indices become outward, and quantized degenerate triangles are dropped.
 
 `collision_platforms.c` links the production surface loader, collision queries, platform
 displacement and matrix routines. It checks a leaning rock wall and its triangle seam across
@@ -29,19 +30,9 @@ Replaying the reported regular jump in-game remains necessary to confirm this in
 
 ## Fog gates
 
-Godrick's arena fog was crossed by walking without Interact. Normal SM64 movement now checks
-its actual segment at chest/head height against live Havok with the existing player movement
-filter before updating the character proxy. A hit clamps horizontal movement on the near side;
-vertical simulation continues. This covers blockers missing from the imported mesh, without
-guessing a new fog collision layer or making a permanent wall after the blocker is removed.
-Actual game-driven entry animations bypass the guard. An unrelated animation change after
-Interact can no longer start follow mode and discard wall collision. Body hits are recomputed
-at the accepted position so rejected movement cannot damage enemies through the barrier.
-
-Portable tests cover live blockers, legitimate entry, removed blockers, jumping/dashing and
-vertical-only movement. Live validation remains required at Godrick: walking/jumping/dashing
-must block before Interact, entry must work after Interact, and defeated-boss passage must stay
-open. Also check normal stairs, sloped ground and elevators for guard false positives.
+The movement guard that checked Mario's movement against the game's player blockers was taken
+out again: the game's rays still hit blockers it had already removed (boss fog walls after the
+fight, opened doors), which left invisible walls. Fog gates are back to how they were before.
 
 ## Invisible collision after descending the Liurnia cliff
 
@@ -70,20 +61,33 @@ backward teleportation. Live validation must cover carrying/spinning near walls,
 throws into walls, full-speed/ragdoll impacts, ground impacts and fog-boundary throws. Confirm
 impact damage is applied once and the surviving boss resumes the fight on the reachable side.
 
+## Reported live results and upstream port
+
+Alaric confirmed the stakes, stair-railing overhang, southern Liurnia invisible barrier,
+fog-wall blocking and normal Interact entry, and BOFA boss-throw fixes in the combined fork
+playtest (final confirmations on `6d88a08`). Rocks and the previously problematic elevator
+also passed earlier. The collision/throw fixes were separately ported upstream on `4308bac`,
+preserving upstream's subsequent floor/ceiling orientation correction. This combined addon
+branch now incorporates the complete upstream 0.3.5 tree at `5cbd616`, including those fixes.
+The combined 0.3.5 merge still needs an in-game replay.
+
 ## In-game validation still required
 
-The reported rock location was unspecified. No Elden Ring session was launched during this
-change, so test success does not establish coverage of every live Havok mesh/layer or the
-original clipping incident. The draft DLL should be checked on several stationary boulders
+The reported rock location was unspecified. Automated tests do not establish coverage of every
+live Havok mesh/layer; the earlier playtest confirmations apply to their tested builds.
+The combined 0.3.5 merge needs fresh validation. The draft DLL should be checked on several stationary boulders
 from ground and air, along seams and sloping faces, and on an elevator from rest in both
 directions. Check stepping onto/off the lift, jumping while it moves, landing on it, stopping
 at both endpoints, and travelling far enough to trigger world-origin rebasing or streaming.
 
-Mesh triangles now retain Havok winding after the coordinate reflection rather than changing
-with Mario's location. Convex shapes and synthetic custom-piece boxes explicitly face outward.
+Wall triangles retain reflected Havok winding rather than changing with Mario's location.
+Floor/ceiling candidates use upstream's Mario-height correction, clamped to their vertex-height
+range, to handle reversed map authoring. Convex wall faces and synthetic boxes face outward;
+floor/ceiling candidates can override an unreliable convex center using that height correction.
 Havok accepts two-sided mesh hits; libsm64 uses oriented surfaces, so meshes with intentionally
 inconsistent or reversed authoring need particular attention in the in-game check.
 
-This branch starts at `d801f342c1c2ac1f938671ef97dc17a912e66e0c` and changes the collision refresh
-portion of `src/lib.rs`. Integrate with `codex/mario-fludd` by reviewing that shared tick loop
-and rerunning both branches' tests together; do not overwrite or blindly merge the FLUDD work.
+The original collision work began at `d801f342c1c2ac1f938671ef97dc17a912e66e0c`; its isolated
+upstream contribution began at `bf558b37449a7a1a73e870a0ec89c3fd8785f574`. The current branch
+also contains AP and movement addons. Rerun all collision and addon tests together after merges;
+synthetic tests and a Windows build do not replace the live-game checks above.

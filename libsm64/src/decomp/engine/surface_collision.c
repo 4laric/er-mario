@@ -200,6 +200,12 @@ static s32 find_wall_collisions_from_list( struct SM64WallCollisionData *data) {
         if (offset < -radius || offset > radius) {
             continue;
         }
+        // er: well behind a wall is the far side of a thin one (doors, fog gates ~12 cm): pushing
+        // out of its back face shoved Mario through to the other side, ~1 m at once, even standing
+        // still. A wall he only pushed into a little still pushes him back.
+        if (offset < -radius * 0.5f) {
+            continue;
+        }
 
         px = x;
         pz = z;

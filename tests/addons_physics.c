@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <string.h>
+#include <math.h>
 #include "er_addons.h"
 #include "libsm64.h"
 #include "er_fludd.h"
@@ -15,12 +16,25 @@ static u32 last_sound;
 static struct Object mario_object;
 static struct SM64SurfaceCollisionData surface;
 static float ceiling=10000, floor_y=0;
-u32 set_mario_action(struct MarioState *m,u32 action,u32 arg) {m->action=action;m->actionArg=arg;return 1;}
+u32 set_mario_action(struct MarioState *m,u32 action,u32 arg) {
+    /* Match the native walking initializer's stick minimum to catch unwanted
+       charge-speed snaps on its initial transition from idle. */
+    if(action==ACT_WALKING) {
+        float minimum=fminf(m->intendedMag,8);
+        if(m->forwardVel>=0&&m->forwardVel<minimum)m->forwardVel=minimum;
+    }
+    m->action=action;m->actionArg=arg;return 1;
+}
 void mario_set_forward_vel(struct MarioState *m,f32 speed) {m->forwardVel=speed;m->vel[2]=speed;}
 s16 set_mario_animation(struct MarioState *m,s32 id) {
     struct AnimInfo *a=&m->marioObj->header.gfx.animInfo;
-    if(a->animID!=id){animation_resets++;a->animID=id;a->animFrame=0;}
+    if(a->animID!=id){animation_resets++;a->animID=id;a->animFrame=0;a->animAccel=0;}
     return a->animFrame;
+}
+s16 set_mario_anim_with_accel(struct MarioState *m,s32 id,s32 accel) {
+    s16 frame=set_mario_animation(m,id);
+    m->marioObj->header.gfx.animInfo.animAccel=accel;
+    return frame;
 }
 void play_sound(uint32_t soundBits, f32 *position) {
     assert(position != 0);sound_calls++;last_sound=(u32)soundBits;
@@ -62,9 +76,34 @@ int main(void) {
     assert(er_cappy.position[2]==396 && er_cappy.phase==1);
     float z=er_cappy.position[2];for(int i=0;i<4;i++)assert(!step(&m));assert(er_cappy.position[2]==z);
     er_cappy_configure(1,3);assert(er_cappy.phase==1&&er_cappy.age==16); /* replay */
-    er_addons_input(1,0,0,0);assert(!step(&m));assert(er_cappy.phase==2&&er_cappy.position[2]<z);
+    er_addons_input(1,0,0,0);assert(!step(&m));assert(er_cappy.phase==1&&er_cappy.position[2]==z);
+    er_addons_input(1,1,0,0);assert(!step(&m));assert(er_cappy.phase==2&&er_cappy.position[2]<z);
     for(int i=0;i<90;i++) { step(&m); }
     assert(er_cappy.phase==0);
+    /* A tap completes outbound travel and remains available for a bounce without
+       holding the throw button. Return starts at tick60, independent of holding. */
+    for(int held=0;held<2;held++) {
+        reset();m=mario();er_cappy_configure(1,3);er_addons_input(1,1,0,0);step(&m);
+        er_addons_input(1,held,0,0);
+        for(int i=1;i<59;i++)assert(!step(&m));
+        assert(er_cappy.age==59&&er_cappy.phase==1&&er_cappy.position[2]==396);
+        assert(!step(&m));assert(er_cappy.phase==2&&er_cappy.position[2]<396);
+    }
+    /* Velocity is sampled once at launch: sideways/upward motion is inherited,
+       later input cannot steer it, and extreme velocity stays bounded/swept. */
+    reset();m=mario();m.vel[0]=12;m.vel[1]=4;m.vel[2]=20;
+    er_cappy_configure(1,3);er_addons_input(1,1,0,0);assert(!step(&m));
+    assert(er_cappy.position[0]==12&&er_cappy.position[1]==144&&er_cappy.position[2]==53);
+    m.vel[0]=-30;m.vel[1]=-30;m.vel[2]=-30;er_addons_input(1,0,0,0);assert(!step(&m));
+    assert(er_cappy.position[0]==24&&er_cappy.position[1]==148&&er_cappy.position[2]==106);
+    assert(!air_calls&&!ground_calls);
+    reset();m=mario();m.vel[2]=10000;er_cappy_configure(1,1);er_addons_input(1,1,0,0);
+    assert(!step(&m)&&er_cappy.position[2]==80&&queries>=10);
+    reset();m=mario();m.vel[2]=10000;wall=15;er_cappy_configure(1,1);er_addons_input(1,1,0,0);
+    assert(!step(&m)&&er_cappy.position[2]<15);
+    reset();m=mario();m.vel[0]=NAN;m.vel[1]=INFINITY;m.vel[2]=0;
+    er_cappy_configure(1,1);er_addons_input(1,1,0,0);assert(!step(&m));
+    assert(isfinite(er_cappy.position[0])&&isfinite(er_cappy.position[1])&&er_cappy.position[2]==33);
     /* Swept wall/floor/ceiling obstruction: no projectile tunnel. */
     for(int obstacle=0;obstacle<3;obstacle++) {
         reset();m=mario();er_cappy_configure(1,3);er_addons_input(1,1,0,0);
@@ -98,13 +137,32 @@ int main(void) {
     }
     reset();m=mario();er_sonic_configure(1,7);er_addons_input(1,0,1,0);
     for(int i=0;i<30;i++) { assert(step(&m)); }
-    assert(m.pos[2]==0&&er_sonic.spin_charge==30);
+    assert(m.pos[2]==0&&m.forwardVel==0&&er_sonic.spin_charge==30);
     er_sonic_configure(1,7);assert(er_sonic.spin_charge==30);
     er_addons_input(1,0,0,0);assert(step(&m)&&m.forwardVel==108);
     collision=GROUND_STEP_HIT_WALL;assert(step(&m)&&!m.forwardVel&&!er_sonic.rolling);
     er_sonic.rolling=10;er_sonic.rolling_unlock=1;er_sonic_configure(1,6);assert(!er_sonic.rolling);
     er_sonic.rolling=10;er_sonic.rolling_unlock=2;er_sonic_configure(1,7);assert(er_sonic.rolling==10);
     er_sonic_configure(1,1);assert(!er_sonic.rolling); /* relock the actual originating family */
+    /* Charge remains stationary even with full stick input. Only the native
+       spin animation rate rises, caps at3x, and retains its current frame. */
+    reset();m=mario();m.intendedMag=32;m.intendedYaw=0x4000;er_sonic_configure(1,1);er_addons_input(1,0,1,0);
+    for(int i=1;i<=30;i++) {
+        assert(step(&m)&&m.forwardVel==0&&m.pos[2]==0&&m.faceAngle[1]==0x4000);
+        assert(!er_sonic.attack_state);
+        assert(mario_object.header.gfx.animInfo.animAccel==0x10000+(i-1)*0x20000/29);
+        assert(mario_object.header.gfx.animInfo.animFrame==i-1);
+        mario_object.header.gfx.animInfo.animFrame++;
+    }
+    for(int i=0;i<10;i++) {
+        assert(step(&m)&&!er_sonic.attack_state&&m.forwardVel==0&&m.pos[2]==0);
+        assert(mario_object.header.gfx.animInfo.animAccel==0x30000&&er_sonic.spin_charge==30);
+        mario_object.header.gfx.animInfo.animFrame++;
+    }
+    assert(animation_resets==1);
+    er_addons_input(1,0,0,0);assert(step(&m)&&m.forwardVel==108&&er_sonic.attack_state==8);
+    assert(mario_object.header.gfx.animInfo.animAccel==0x10000&&animation_resets==1);
+    collision=GROUND_STEP_HIT_WALL;assert(step(&m)&&!m.forwardVel&&!er_sonic.spin_charge&&!er_sonic.attack_state);
     /* Real landing carries charged Drop Dash to the ground without needing Spin. */
     reset();m=mario();m.action=ACT_FREEFALL;er_sonic_configure(1,2);er_addons_input(1,0,1,0);
     for(int i=0;i<12;i++)assert(!step(&m));
@@ -195,10 +253,10 @@ int main(void) {
     }
     /* Priority: Sonic movement prevents a second FLUDD air step or fuel consumption. */
     reset();m=mario();m.action=ACT_FREEFALL;er_sonic_configure(1,4);er_fludd_configure(1,7,0);er_fludd_reset();
-    er_addons_input(1,0,0,1);er_fludd_input(1,1,1,0);assert(step(&m)&&air_calls==1&&er_fludd.water==60);
+    er_addons_input(1,0,0,1);er_fludd_input(1,1,1,0);assert(step(&m)&&air_calls==1&&er_fludd.water==300);
     /* A previously active jet cannot keep its visual on after losing ownership. */
     reset();m=mario();er_fludd_configure(1,7,0);er_fludd_reset();er_fludd_input(1,1,1,0);
-    er_addons_input(1,0,0,0);assert(step(&m)&&er_fludd.active&&er_fludd.water==59);
+    er_addons_input(1,0,0,0);assert(step(&m)&&er_fludd.active&&er_fludd.water==299);
     unsigned water=er_fludd.water,charge=er_fludd.charge;int calls=air_calls;
     er_sonic_configure(1,4);er_addons_input(1,0,0,1);
     assert(step(&m)&&air_calls==calls+1&&!er_fludd.active);

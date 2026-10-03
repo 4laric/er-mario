@@ -17,11 +17,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: er-mario
-      - uses: actions/checkout@v4
-        with:
-          repository: vswarte/fromsoftware-rs
-          ref: 59fbd3b3b7daaf14aca47c9f73530493dba6bc79
-          path: fromsoftware-rs
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -39,6 +34,10 @@ jobs:
           $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
           $env:CC_x86_64_pc_windows_msvc = 'clang-cl'
           clang-cl --version
+          rustc --edition=2024 --test src/flask_policy.rs -o flask_policy_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./flask_policy_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           powershell.exe -NoProfile -File tests/compose_paths.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           rustc --edition=2024 --test tests/ap_bridge.rs -o ap_bridge_tests.exe
@@ -73,6 +72,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./addons_physics_tests.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          clang-cl /Ilibsm64/src /Ilibsm64/src/decomp/include /Ishim /DGBI_FLOATS /DVERSION_US tests/skate_physics.c libsm64/src/er_skate.c /Fe:skate_physics_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./skate_physics_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           rustc --edition=2024 --test src/collision_geometry.rs -o collision_geometry_tests.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./collision_geometry_tests.exe
@@ -85,10 +88,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./addon_hitboxes_tests.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          rustc --edition=2024 --test src/movement_guard.rs -o movement_guard_tests.exe
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ./movement_guard_tests.exe
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           rustc --edition=2024 --test src/throw_collision.rs -o throw_collision_tests.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./throw_collision_tests.exe
@@ -96,6 +95,10 @@ jobs:
           clang-cl /Gy /Ilibsm64/src /Ilibsm64/src/decomp/include /Ishim /DGBI_FLOATS /DVERSION_US tests/collision_platforms.c libsm64/src/load_surfaces.c libsm64/src/decomp/engine/surface_collision.c libsm64/src/decomp/game/platform_displacement.c libsm64/src/decomp/engine/math_util.c libsm64/src/decomp/engine/guMtxF2L.c /Fe:collision_platforms_tests.exe /link /OPT:REF
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./collision_platforms_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          clang-cl /Gy /Ilibsm64/src /Ilibsm64/src/decomp/include /Ishim /DGBI_FLOATS /DVERSION_US tests/floor_seam.c libsm64/src/er_floor_seam.c libsm64/src/load_surfaces.c libsm64/src/decomp/engine/surface_collision.c libsm64/src/decomp/engine/math_util.c libsm64/src/decomp/engine/guMtxF2L.c /Fe:floor_seam_tests.exe /link /OPT:REF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./floor_seam_tests.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -1,6 +1,6 @@
 [package]
 name = "er-mario"
-version = "0.3.3"
+version = "0.3.7"
 edition = "2024"
 license = "MIT"
 publish = false
@@ -10,8 +10,8 @@ name = "er_mario"
 crate-type = ["cdylib"]
 
 [dependencies]
-eldenring = { path = "../fromsoftware-rs/crates/eldenring" }
-fromsoftware-shared = { path = "../fromsoftware-rs/crates/shared" }
+eldenring = { git = "https://github.com/vswarte/fromsoftware-rs", rev = "59fbd3b3b7daaf14aca47c9f73530493dba6bc79" }
+fromsoftware-shared = { git = "https://github.com/vswarte/fromsoftware-rs", rev = "59fbd3b3b7daaf14aca47c9f73530493dba6bc79" }
 glam = "0.30"
 cpal = "0.15"
 ilhook = { version = "2.3.0", features = ["x64"] }
@@ -28,6 +28,7 @@ windows = { version = "0.61", features = [
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Kernel",
+    "Win32_Networking_WinHttp",
 ] }
 num-bigint = "0.4"
 aes = "0.8"
