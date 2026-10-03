@@ -1,6 +1,8 @@
 #include <stdlib.h>
 #include <math.h>
 
+#include "../../er_floor_seam.h"
+
 #include "../shim.h"
 #include "../include/PR/os_cont.h"
 #include "../include/mario_geo_switch_case_ids.h"
@@ -1350,7 +1352,8 @@ void update_mario_geometry_inputs(struct MarioState *m) {
         m->floorAngle = atan2s(m->floor->normal.z, m->floor->normal.x);
         m->terrainSoundAddend = mario_get_terrain_sound_addend(m);
 
-        if ((m->pos[1] > m->waterLevel - 40) && mario_floor_is_slippery(m)) {
+        if ((m->pos[1] > m->waterLevel - 40) && mario_floor_is_slippery(m)
+            && !er_floor_seam_has_flat_support(m)) {
             m->input |= INPUT_ABOVE_SLIDE;
         }
 

@@ -40,6 +40,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./collision_platforms_tests.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          clang-cl /Gy /Ilibsm64/src /Ilibsm64/src/decomp/include /Ishim /DGBI_FLOATS /DVERSION_US tests/floor_seam.c libsm64/src/er_floor_seam.c libsm64/src/load_surfaces.c libsm64/src/decomp/engine/surface_collision.c libsm64/src/decomp/engine/math_util.c libsm64/src/decomp/engine/guMtxF2L.c /Fe:floor_seam_tests.exe /link /OPT:REF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./floor_seam_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --locked --release
