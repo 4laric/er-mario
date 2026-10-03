@@ -40,12 +40,11 @@ work through Steam Input, which Steam turns on for them by default.
 
 ## Known issues
 
+- While alot of them should be fixed, there is still a chance that you might clip through some elevators. Let me know which ones and I will fix them ASAP.
 - Cutscenes show a crumpled Mario with the Tarnished's head.
-- Mario's walk can flicker a little while passing fog walls.
 - Torrent can't be summoned in Mario mode.
 - Some big bosses' ragdolls go wild after a throw; the mod stops them early.
 - Mario's shadow can flicker or drop out from some camera angles in sunlight and moonlight.
-- Some hills and rocks have no collision in the game itself; Mario walks into them.
 - With a controller, Mario can sometimes keep flicking between two directions while you
   move, as if two sticks were steering him. Restart the game and it's gone. It seems to happen
   when the controller connects or reconnects while the game is already running.
