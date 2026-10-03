@@ -271,8 +271,9 @@ pub fn nearby(center: &HavokPosition, range: f32, origin: [f32; 3]) -> Vec<Targe
             let ph = &chr.modules.physics;
             let r = ph.hit_radius.max(ph.chr_hit_radius);
             let h = ph.hit_height.max(ph.chr_hit_height);
-            let radius = if r.is_finite() && r > 0.1 { (r * 100.0).clamp(40.0, 300.0) } else { TARGET_RADIUS };
-            let height = if h.is_finite() && h > 0.3 { (h * 100.0).clamp(80.0, 800.0) } else { TARGET_HEIGHT };
+            // (up to giant size: capped at 3 m the Fire Giant's ankles were outside his own body)
+            let radius = if r.is_finite() && r > 0.1 { (r * 100.0).clamp(40.0, 1500.0) } else { TARGET_RADIUS };
+            let height = if h.is_finite() && h > 0.3 { (h * 100.0).clamp(80.0, 4000.0) } else { TARGET_HEIGHT };
             {
                 static SEEN: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
                 let key = handle_key(&chr.field_ins_handle);
@@ -406,11 +407,15 @@ pub fn impact(combat: &mut Combat, handle: &FieldInsHandle, pct: f32, tick: u32)
     let dmg = ((max as f32 * pct / 100.0).ceil() as i32).max(1);
     // (throws kill right there when the impact takes the rest of his HP)
     data.hp = (hp - dmg).max(0);
-    show_damage(handle, hp, hp - data.hp, true);
+    let dealt = hp - data.hp;
+    show_damage(handle, hp, dealt, true);
     if data.hp == 1 {
         combat.finishing.entry(handle_key(handle)).or_insert((*handle, tick));
     }
     combat.victims.insert(handle_key(handle), (*handle, tick));
+    if !is_boss(handle) {
+        pass_to_bar(wcm, dealt);
+    }
 }
 
 /// The bosses on screen (their boss bars).
@@ -469,6 +474,22 @@ pub fn bosses() -> Vec<crate::hud::BossBar> {
         .collect()
 }
 
+/// Damage to a boss body that isn't the one on the boss bar (the Fire Giant's first phase: the
+/// bar is his second-phase character, with about twice the HP, and the game passes each hit on
+/// to it): the bar's character loses the same HP, or the bar stood still for the whole first phase.
+fn pass_to_bar(wcm: &mut WorldChrMan, dealt: i32) {
+    let on_bar: Vec<FieldInsHandle> = unsafe { eldenring::cs::CSFeManImp::instance() }
+        .map(|fe| fe.boss_health_displays.iter().filter(|e| !e.field_ins_handle.is_empty()).map(|e| e.field_ins_handle.clone()).collect())
+        .unwrap_or_default();
+    let [only] = on_bar.as_slice() else { return };
+    let Some(main) = wcm.chr_ins_by_handle_mut(only).filter(|c| !own_side(c.team_type) && c.modules.data.hp > 1) else { return };
+    let d = &mut main.modules.data;
+    let hp = d.hp;
+    d.hp = (hp - dealt).max(1);
+    show_damage(only, hp, hp - d.hp, true);
+    log(format!("combat: passed on to the boss bar's character: {dealt} of {} HP, {} left", d.max_hp, d.hp));
+}
+
 /// Takes the attack's share of the character's max HP (never the last point: the bullet deals the
 /// final blow, so the kill is the game's own). Returns true if it's down to that last point.
 fn take_share(handle: &FieldInsHandle, attack: Attack) -> bool {
@@ -506,7 +527,11 @@ fn take_share(handle: &FieldInsHandle, attack: Attack) -> bool {
     data.hp = (hp - dmg).max(1);
     show_damage(handle, hp, hp - data.hp, bar);
     log(format!("combat: {:?} on team {team}{}: {dmg} of {max} HP ({pct:.1}%), {} left", attack as u8, if boss { " boss" } else { "" }, data.hp));
-    data.hp == 1
+    let (last, dealt) = (data.hp == 1, hp - data.hp);
+    if boss && !bar {
+        pass_to_bar(wcm, dealt);
+    }
+    last
 }
 
 /// Target body in SM64 units: horizontal radius and height (a human-sized capsule).
